@@ -1,3 +1,4 @@
+mod basic;
 mod client_data;
 mod device_data;
 pub mod random_value;
@@ -13,20 +14,26 @@ use std::{
     time::Duration,
 };
 
+use basic::{TopicWrap, TotalTopics};
 use chrono::{DateTime, Local};
 use clap::{value_parser, Arg, Command};
 use client_data::ClientData;
 use dashmap::DashMap;
 use device_data::DeviceData;
 use mqtt::{Message, QOS_1};
-use once_cell::sync::Lazy;
+use once_cell::sync::{Lazy, OnceCell};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use sysinfo::System;
 use tokio::{io::AsyncReadExt, time::sleep};
 extern crate paho_mqtt as mqtt;
 
 // 全局静态变量，用于存储客户端上下文
 static CLIENT_CONTEXT: Lazy<DashMap<String, ClientData>> = Lazy::new(DashMap::new);
+// 存储注册topic
+static REGISTER_INFO: OnceCell<TopicWrap> = OnceCell::new();
+// 存储数据上报主题
+static DATA_INFO: OnceCell<TopicWrap> = OnceCell::new();
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,13 +42,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 获取命令行参数的值
     let data_file_path: &String = matches.get_one::<String>("data-file").unwrap();
+    let topic_file_path: &String = matches.get_one::<String>("topic-file").unwrap();
     let client_file_path = matches.get_one::<String>("client-file").unwrap();
     let setting_thread_size = matches.get_one::<usize>("thread-size").unwrap();
     let setting_broker = matches.get_one::<String>("broker").unwrap();
     let setting_send_interval = matches.get_one::<u64>("send-interval").unwrap();
 
+    let msg = get_data_from_json_file::<DeviceData>(data_file_path).await?;
+    let topic = get_data_from_json_file::<TotalTopics>(topic_file_path).await?;
+    // 解析主题
+    match topic {
+        TotalTopics::REGISTER(register) => {
+            let _ = REGISTER_INFO.set(register);
+        }
+        TotalTopics::DATA(data) => {
+            let _ = DATA_INFO.set(data);
+        }
+    }
+
     // 读取CSV文件，获取消息内容和客户端数据
-    let msg = get_data_from_json_file(data_file_path).await?;
     let client_data = read_from_csv_into_struct::<ClientData>(client_file_path)?;
 
     // 设置MQTT客户端
@@ -67,9 +86,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await;
 
-    // 循环输出已发送的消息数
+    // 初始化系统信息获取器
+    let mut sys = System::new_all();
+    let pid = sysinfo::get_current_pid().expect("Failed to get current PID");
+
+    // 循环输出已发送的消息数和系统信息
     loop {
-        println!("已发送消息数: {}", counter.load(Ordering::SeqCst));
+        sys.refresh_all();
+
+        // 获取当前应用程序的CPU和内存使用信息
+        if let Some(process) = sys.process(pid) {
+            let cpu_usage = process.cpu_usage();
+            let memory_used = process.memory();
+
+            println!("已发送消息数: {}", counter.load(Ordering::SeqCst));
+            println!("CPU使用率: {:.2}%", cpu_usage);
+            println!("内存使用: {} KB", memory_used);
+        } else {
+            println!("无法获取当前进程的信息");
+        }
+
         sleep(Duration::from_secs(1)).await;
     }
 }
@@ -88,6 +124,15 @@ fn parse_args() -> clap::ArgMatches {
                 .required(false)
                 .default_value("./data.json")
                 .help("设置需发送的数据文件路径,默认为当前目录下的data.json"),
+        )
+        .arg(
+            Arg::new("topic-file")
+                .short('o')
+                .long("topic-file")
+                .value_name("FILE")
+                .required(false)
+                .default_value("./topic.json")
+                .help("设置需发送的数据文件路径,默认为当前目录下的topic.json"),
         )
         .arg(
             Arg::new("client-file")
@@ -174,60 +219,68 @@ async fn wait_for_connections(clients: &[mqtt::AsyncClient]) {
     }
 }
 
-/// 启动发送消息的线程
 async fn spawn_message_threads(
-    clients: Vec<mqtt::AsyncClient>,
-    msg: DeviceData,
-    counter: Arc<AtomicU32>,
-    thread_size: usize,
-    setting_send_interval: u64,
+    clients: Vec<mqtt::AsyncClient>, // MQTT客户端向量
+    msg: DeviceData,                 // 要发送的数据消息
+    counter: Arc<AtomicU32>,         // 用于跟踪发送消息的原子计数器
+    thread_size: usize,              // 要生成的线程数量
+    setting_send_interval: u64,      // 发送间隔时间
 ) {
+    // 确定每个线程处理的客户端数量
     let startup_thread_size = clients.len() / thread_size
         + if clients.len() % thread_size != 0 {
             1
         } else {
             0
         };
+
+    // 按线程大小将客户端分组
     let clients_group = clients.chunks(startup_thread_size);
 
+    // 遍历每个客户端组
     for group in clients_group {
-        let group = group.to_vec();
-        let msg_value: DeviceData = msg.clone();
-        let counter: Arc<AtomicU32> = counter.clone();
+        let group = group.to_vec(); // 将组转换为向量以获得所有权
+        let msg_value: DeviceData = msg.clone(); // 克隆消息数据
+        let counter: Arc<AtomicU32> = counter.clone(); // 克隆原子计数器
+        let topic = DATA_INFO.get().unwrap(); // 获取数据上报主题
+
+        // 为每个客户端组生成一个异步任务
         tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(setting_send_interval));
+
             loop {
+                // 遍历每个组中的客户端
                 for cli in group.iter() {
-                    let client_id = cli.client_id();
-                    let client_data = match CLIENT_CONTEXT.get(&client_id.to_string()) {
-                        Some(data) => data,
-                        None => {
-                            continue;
-                        }
-                    };
-                    let topic = format!("/pub/{}/long_freq/data", client_data.get_device_key());
-                    let now: DateTime<Local> = Local::now();
-                    let formatted_time = now.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+                    let client_id = cli.client_id().to_string();
+                    if let Some(client_data) = CLIENT_CONTEXT.get(&client_id) {
+                        // 创建发布的主题
+                        let real_topic = topic.get_real_topic(Some(client_data.get_device_key()));
+                        // 获取当前本地时间
+                        let now: DateTime<Local> = Local::now();
+                        // 格式化时间用于消息
+                        let formatted_time = now.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
 
-                    let mut msg_value = msg_value.clone();
-                    msg_value.set_timestamp(formatted_time.into());
+                        let mut msg_value = msg_value.clone(); // 克隆消息数据
+                        msg_value.set_timestamp(formatted_time.into()); // 设置时间戳
 
-                    // 随机数据
-                    // let data = msg_value.get_data();
+                        // 将消息数据序列化为JSON
+                        let json_msg = match serde_json::to_string(&msg_value) {
+                            Ok(msg) => msg,
+                            Err(e) => {
+                                eprintln!("序列化JSON失败: {}", e);
+                                return;
+                            }
+                        };
 
-                    let json_msg = match serde_json::to_string(&msg_value) {
-                        Ok(msg) => msg,
-                        Err(e) => {
-                            eprintln!("Failed to serialize JSON: {}", e);
-                            return;
-                        }
-                    };
-
-                    let payload: mqtt::Message =
-                        mqtt::Message::new(topic, json_msg.clone(), mqtt::QOS_0);
-                    counter.fetch_add(1, Ordering::SeqCst);
-                    let _ = cli.publish(payload);
+                        // 创建带有主题和负载的MQTT消息
+                        let payload: mqtt::Message =
+                            mqtt::Message::new(real_topic, json_msg.clone(), mqtt::QOS_0);
+                        counter.fetch_add(1, Ordering::SeqCst); // 增加计数器
+                        let _ = cli.publish(payload); // 发布消息
+                    }
                 }
-                sleep(Duration::from_secs(setting_send_interval)).await;
+                // 等待指定的间隔时间再进行下一次发送
+                interval.tick().await;
             }
         });
     }
@@ -235,40 +288,60 @@ async fn spawn_message_threads(
 
 /// 连接成功的回调函数
 fn on_connect_success(cli: &mqtt::AsyncClient, _msgid: u16) {
-    let sn_json: Value = serde_json::json!({"sn": cli.client_id()});
-    let sn_json_str = serde_json::to_string(&sn_json).unwrap();
+    // 创建包含SN的JSON对象
+    let sn_json = serde_json::json!({"sn": cli.client_id()});
 
-    let register_msg = mqtt::Message::new("/pub/register", sn_json_str, QOS_1);
-    let _ = cli.publish(register_msg);
-    let topic = format!("/sub/{}/register/ack", cli.client_id());
-    cli.subscribe(topic, QOS_1);
+    // 将JSON对象序列化为字符串，并处理可能的错误
+    match serde_json::to_string(&sn_json) {
+        Ok(sn_json_str) => {
+            // 创建注册消息并发布
+            let pub_topic = REGISTER_INFO.get().unwrap().get_real_topic(None);
+            let register_msg = mqtt::Message::new(pub_topic, sn_json_str, QOS_1);
+            cli.publish(register_msg);
+            // 创建订阅主题并订阅
+            let sub_topic = REGISTER_INFO
+                .get()
+                .unwrap()
+                .get_real_topic(Some(cli.client_id().as_str()));
+            cli.subscribe(sub_topic, QOS_1);
+        }
+        Err(e) => {
+            eprintln!("设备注册失败，失败信息： {}", e);
+        }
+    }
 }
 
 /// 连接失败的回调函数
 fn on_connect_failure(_cli: &mqtt::AsyncClient, _msgid: u16, rc: i32) {
-    println!("Connection attempt failed with error code {}.", rc);
+    println!("尝试连接失败，错误码为 {}.", rc);
 }
 
 /// 消息回调函数
 fn on_message_callback(_: &mqtt::AsyncClient, msg: Option<Message>) {
     if let Some(msg) = msg {
-        let topic = msg.topic().to_string();
-        let path = topic.starts_with("/sub");
+        let topic = msg.topic(); // 获取消息主题
 
-        if path {
-            let (real_topic, mac) = get_real_topic_mac(&topic);
-            let data = msg.payload();
-            let data_json: Value = serde_json::from_slice(data).unwrap();
-            if real_topic == "/sub/register/ack" {
-                let obj = data_json.as_object().unwrap();
-                let device_key: &Value = obj.get("device_key").unwrap();
+        // 检查主题是否以"/sub"开头
+        if topic.starts_with("/sub") {
+            // 获取真实的主题和MAC地址
+            let (real_topic, mac) = get_real_topic_mac(topic);
+            let data = msg.payload(); // 获取消息负载
 
-                CLIENT_CONTEXT.alter(&mac, |_, mut v| {
-                    let key_string = device_key.to_string();
-                    let key = key_string.trim_matches('"');
-                    v.set_device_key(key.to_string());
-                    v
-                });
+            // 尝试将负载解析为JSON
+            if let Ok(data_json) = serde_json::from_slice::<serde_json::Value>(data) {
+                // 检查真实主题是否为"/sub/register/ack"
+                if real_topic == "/sub/register/ack" {
+                    // 检查JSON对象中是否存在"device_key"
+                    if let Some(device_key) = data_json.get("device_key") {
+                        // 将device_key转换为字符串
+                        if let Some(device_key_str) = device_key.as_str() {
+                            // 更新CLIENT_CONTEXT中的device_key
+                            CLIENT_CONTEXT.entry(mac.to_string()).and_modify(|v| {
+                                v.set_device_key(device_key_str.to_string());
+                            });
+                        }
+                    }
+                }
             }
         }
     }
@@ -311,15 +384,16 @@ fn get_real_topic_mac(topic: &str) -> (String, String) {
     (topic.join("/"), mac.to_string())
 }
 
-async fn get_data_from_json_file(
-    file_path: &str,
-) -> Result<DeviceData, Box<dyn std::error::Error>> {
+async fn get_data_from_json_file<T>(file_path: &str) -> Result<T, Box<dyn std::error::Error>>
+where
+    T: DeserializeOwned + Debug,
+{
     use tokio::fs::File;
 
     let mut file = File::open(file_path).await?;
     let mut contents = String::new();
     file.read_to_string(&mut contents).await?;
 
-    let msg: DeviceData = serde_json::from_str(&contents)?;
+    let msg: T = serde_json::from_str(&contents)?;
     Ok(msg)
 }
