@@ -1,20 +1,18 @@
 {
-  "topic": {
-    "register": {
-      "publish": {
-        "key_index": null,
-        "topic": "/pub/register"
-      },
-      "subscribe": {
-        "key_index": 2,
-        "topic": "/sub/register/ack"
-      }
+  "register": {
+    "publish": {
+      "key_index": null,
+      "topic": "/pub/register"
     },
-    "data": {
-      "publish": {
-        "key_index": 2,
-        "topic": "/pub/long_freq/data"
-      }
+    "subscribe": {
+      "key_index": 2,
+      "topic": "/sub/register/ack"
+    }
+  },
+  "data": {
+    "publish": {
+      "key_index": 2,
+      "topic": "/pub/long_freq/data"
     }
   }
 }

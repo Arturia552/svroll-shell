@@ -34,7 +34,8 @@ static CLIENT_CONTEXT: Lazy<DashMap<String, ClientData>> = Lazy::new(DashMap::ne
 static REGISTER_INFO: OnceCell<TopicWrap> = OnceCell::new();
 // 存储数据上报主题
 static DATA_INFO: OnceCell<TopicWrap> = OnceCell::new();
-
+// 是否启用注册包
+static ENABLE_REGISTER: OnceCell<bool> = OnceCell::new();
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 解析命令行参数
@@ -47,18 +48,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let setting_thread_size = matches.get_one::<usize>("thread-size").unwrap();
     let setting_broker = matches.get_one::<String>("broker").unwrap();
     let setting_send_interval = matches.get_one::<u64>("send-interval").unwrap();
+    let enable_register = matches.get_one::<bool>("enable-register").unwrap();
 
     let msg = get_data_from_json_file::<DeviceData>(data_file_path).await?;
-    let topic = get_data_from_json_file::<TotalTopics>(topic_file_path).await?;
-    // 解析主题
-    match topic {
-        TotalTopics::REGISTER(register) => {
-            let _ = REGISTER_INFO.set(register);
-        }
-        TotalTopics::DATA(data) => {
-            let _ = DATA_INFO.set(data);
-        }
+    let topics = get_data_from_json_file::<TotalTopics>(topic_file_path).await?;
+
+    if let Some(register) = topics.register {
+        let _ = REGISTER_INFO.set(register);
+    } else {
+        println!("No register data");
     }
+
+    if let Some(data) = topics.data {
+        let _ = DATA_INFO.set(data);
+    } else {
+        println!("No data");
+    }
+
+    let _ = ENABLE_REGISTER.set(*enable_register);
 
     // 读取CSV文件，获取消息内容和客户端数据
     let client_data = read_from_csv_into_struct::<ClientData>(client_file_path)?;
@@ -101,7 +108,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             println!("已发送消息数: {}", counter.load(Ordering::SeqCst));
             println!("CPU使用率: {:.2}%", cpu_usage);
-            println!("内存使用: {} KB", memory_used);
+            // 转化为MB并打印
+            let memory_used = memory_used / 1024 / 1024;
+            println!("内存使用: {} MB", memory_used);
+            println!("-----------------")
         } else {
             println!("无法获取当前进程的信息");
         }
@@ -152,6 +162,16 @@ fn parse_args() -> clap::ArgMatches {
                 .required(false)
                 .default_value("200")
                 .help("设置启动协程数量,默认为200"),
+        )
+        .arg(
+            Arg::new("enable-register")
+                .short('r')
+                .long("enable-register")
+                .value_parser(value_parser!(bool))
+                .value_name("REGISTER")
+                .required(true)
+                .default_value("true")
+                .help("设置是否启用注册包机制"),
         )
         .arg(
             Arg::new("broker")
@@ -254,7 +274,9 @@ async fn spawn_message_threads(
                     let client_id = cli.client_id().to_string();
                     if let Some(client_data) = CLIENT_CONTEXT.get(&client_id) {
                         // 创建发布的主题
-                        let real_topic = topic.get_real_topic(Some(client_data.get_device_key()));
+
+                        let real_topic =
+                            topic.get_publish_real_topic(Some(client_data.get_device_key()));
                         // 获取当前本地时间
                         let now: DateTime<Local> = Local::now();
                         // 格式化时间用于消息
@@ -288,25 +310,30 @@ async fn spawn_message_threads(
 
 /// 连接成功的回调函数
 fn on_connect_success(cli: &mqtt::AsyncClient, _msgid: u16) {
-    // 创建包含SN的JSON对象
-    let sn_json = serde_json::json!({"sn": cli.client_id()});
+    // 注册包机制启用判断
+    if let Some(enable) = ENABLE_REGISTER.get() {
+        if *enable {
+            // 创建包含SN的JSON对象
+            let sn_json = serde_json::json!({"sn": cli.client_id()});
 
-    // 将JSON对象序列化为字符串，并处理可能的错误
-    match serde_json::to_string(&sn_json) {
-        Ok(sn_json_str) => {
-            // 创建注册消息并发布
-            let pub_topic = REGISTER_INFO.get().unwrap().get_real_topic(None);
-            let register_msg = mqtt::Message::new(pub_topic, sn_json_str, QOS_1);
-            cli.publish(register_msg);
-            // 创建订阅主题并订阅
-            let sub_topic = REGISTER_INFO
-                .get()
-                .unwrap()
-                .get_real_topic(Some(cli.client_id().as_str()));
-            cli.subscribe(sub_topic, QOS_1);
-        }
-        Err(e) => {
-            eprintln!("设备注册失败，失败信息： {}", e);
+            // 将JSON对象序列化为字符串，并处理可能的错误
+            match serde_json::to_string(&sn_json) {
+                Ok(sn_json_str) => {
+                    // 创建注册消息并发布
+                    let pub_topic = REGISTER_INFO.get().unwrap().get_publish_real_topic(None);
+                    let register_msg = mqtt::Message::new(pub_topic, sn_json_str, QOS_1);
+                    cli.publish(register_msg);
+                    // 创建订阅主题并订阅
+                    let sub_topic = REGISTER_INFO
+                        .get()
+                        .unwrap()
+                        .get_subscribe_real_topic(Some(cli.client_id().as_str()));
+                    cli.subscribe(sub_topic, QOS_1);
+                }
+                Err(e) => {
+                    eprintln!("设备注册失败，失败信息： {}", e);
+                }
+            }
         }
     }
 }
@@ -393,7 +420,6 @@ where
     let mut file = File::open(file_path).await?;
     let mut contents = String::new();
     file.read_to_string(&mut contents).await?;
-
     let msg: T = serde_json::from_str(&contents)?;
     Ok(msg)
 }
