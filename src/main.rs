@@ -20,7 +20,7 @@ use clap::{value_parser, Arg, Command};
 use client_data::ClientData;
 use dashmap::DashMap;
 use device_data::DeviceData;
-use mqtt::{Message, QOS_1};
+use mqtt::Message;
 use once_cell::sync::{Lazy, OnceCell};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -295,8 +295,11 @@ async fn spawn_message_threads(
                         };
 
                         // 创建带有主题和负载的MQTT消息
-                        let payload: mqtt::Message =
-                            mqtt::Message::new(real_topic, json_msg.clone(), mqtt::QOS_0);
+                        let payload: mqtt::Message = mqtt::Message::new(
+                            real_topic,
+                            json_msg.clone(),
+                            topic.get_publish_qos(),
+                        );
                         counter.fetch_add(1, Ordering::SeqCst); // 增加计数器
                         let _ = cli.publish(payload); // 发布消息
                     }
@@ -320,15 +323,21 @@ fn on_connect_success(cli: &mqtt::AsyncClient, _msgid: u16) {
             match serde_json::to_string(&sn_json) {
                 Ok(sn_json_str) => {
                     // 创建注册消息并发布
-                    let pub_topic = REGISTER_INFO.get().unwrap().get_publish_real_topic(None);
-                    let register_msg = mqtt::Message::new(pub_topic, sn_json_str, QOS_1);
+                    let pub_topic = REGISTER_INFO.get().unwrap();
+                    let pub_topic_str = pub_topic.get_publish_topic();
+
+                    let register_msg =
+                        mqtt::Message::new(pub_topic_str, sn_json_str, pub_topic.get_publish_qos());
                     cli.publish(register_msg);
+
                     // 创建订阅主题并订阅
-                    let sub_topic = REGISTER_INFO
-                        .get()
-                        .unwrap()
-                        .get_subscribe_real_topic(Some(cli.client_id().as_str()));
-                    cli.subscribe(sub_topic, QOS_1);
+                    let sub_topic = REGISTER_INFO.get().unwrap();
+
+                    if sub_topic.is_exist_subscribe() {
+                        let sub_topic_str =
+                            sub_topic.get_subscribe_real_topic(Some(cli.client_id().as_str()));
+                        cli.subscribe(sub_topic_str, sub_topic.get_subscribe_qos());
+                    }
                 }
                 Err(e) => {
                     eprintln!("设备注册失败，失败信息： {}", e);
@@ -355,17 +364,24 @@ fn on_message_callback(_: &mqtt::AsyncClient, msg: Option<Message>) {
             let data = msg.payload(); // 获取消息负载
 
             // 尝试将负载解析为JSON
-            if let Ok(data_json) = serde_json::from_slice::<serde_json::Value>(data) {
-                // 检查真实主题是否为"/sub/register/ack"
-                if real_topic == "/sub/register/ack" {
-                    // 检查JSON对象中是否存在"device_key"
-                    if let Some(device_key) = data_json.get("device_key") {
-                        // 将device_key转换为字符串
-                        if let Some(device_key_str) = device_key.as_str() {
-                            // 更新CLIENT_CONTEXT中的device_key
-                            CLIENT_CONTEXT.entry(mac.to_string()).and_modify(|v| {
-                                v.set_device_key(device_key_str.to_string());
-                            });
+            if let Ok(data) = serde_json::from_slice::<serde_json::Value>(data) {
+                if let Some(enable) = ENABLE_REGISTER.get() {
+                    if *enable {
+                        let register_topic = REGISTER_INFO.get().unwrap();
+                        let reg_sub_topic = register_topic.get_subscribe_topic().unwrap();
+
+                        // 检查真实主题是否为注册包回复
+                        if real_topic == reg_sub_topic {
+                            // 检查JSON对象中是否存在"device_key"
+                            if let Some(device_key) = data.get("device_key") {
+                                // 将device_key转换为字符串
+                                if let Some(device_key_str) = device_key.as_str() {
+                                    // 更新CLIENT_CONTEXT中的device_key
+                                    CLIENT_CONTEXT.entry(mac.to_string()).and_modify(|v| {
+                                        v.set_device_key(device_key_str.to_string());
+                                    });
+                                }
+                            }
                         }
                     }
                 }

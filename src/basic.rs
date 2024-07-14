@@ -2,18 +2,55 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TopicInfo {
-    key_index: Option<usize>, // 将 key_index 改为 Option<u8> 以处理 null 值
-    topic: String,
+    pub key_index: Option<usize>, // 将 key_index 改为 Option<u8> 以处理 null 值
+    pub topic: String,
+    #[serde(default = "default_qos")]
+    pub qos: i32,
+}
+
+pub fn default_qos() -> i32 {
+    0
+}
+
+impl TopicInfo {
+    pub fn get_topic(&self) -> &str {
+        &self.topic
+    }
+
+    pub fn get_qos(&self) -> i32 {
+        self.qos
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TopicWrap {
-    publish: TopicInfo,
+    pub publish: TopicInfo,
     #[serde(default)] // 为 subscribe 提供一个默认值，因为 data 变体中没有这个字段
-    subscribe: Option<TopicInfo>, // 使用 Option 来处理可能不存在的字段
+    pub subscribe: Option<TopicInfo>, // 使用 Option 来处理可能不存在的字段
 }
 
 impl TopicWrap {
+    pub fn is_exist_subscribe(&self) -> bool {
+        self.subscribe.is_some()
+    }
+
+    pub fn get_publish_topic(&self) -> &str {
+        &self.publish.get_topic()
+    }
+
+    pub fn get_subscribe_topic(&self) -> Option<&str> {
+        self.subscribe
+            .as_ref()
+            .map(|sub_topic| sub_topic.get_topic())
+    }
+
+    pub fn get_publish_qos(&self) -> i32 {
+        self.publish.get_qos()
+    }
+
+    pub fn get_subscribe_qos(&self) -> i32 {
+        self.subscribe.as_ref().unwrap().qos
+    }
 
     pub fn get_publish_real_topic(&self, key_value: Option<&str>) -> &str {
         let topic = &self.publish;
@@ -64,7 +101,6 @@ impl TopicWrap {
                 let new_topic = new_topic_parts.join("/");
                 Box::leak(new_topic.into_boxed_str())
             } else {
-                // If key_index is out of range, return the original topic.
                 &topic.topic
             }
         }
