@@ -213,14 +213,15 @@ async fn setup_clients(
 
         let create_opts = mqtt::CreateOptionsBuilder::new()
             .server_uri(broker.to_string())
-            .client_id(id)
+            .client_id(id.clone())
             .finalize();
         let cli: mqtt::AsyncClient = mqtt::AsyncClient::new(create_opts)?;
 
         let conn_opts = mqtt::ConnectOptionsBuilder::new_v5()
             .clean_start(true)
+            .automatic_reconnect(Duration::from_secs(2), Duration::from_secs(2))
             .keep_alive_interval(Duration::from_secs(30))
-            .user_name(client.get_username())
+            .user_name(id)
             .password(client.get_password())
             .finalize();
 
@@ -228,9 +229,7 @@ async fn setup_clients(
 
         clients.push(cli.clone());
 
-        tokio::spawn(async move {
-            cli.connect_with_callbacks(conn_opts, on_connect_success, on_connect_failure);
-        });
+        cli.connect_with_callbacks(conn_opts, on_connect_success, on_connect_failure);
     }
 
     Ok(clients)
