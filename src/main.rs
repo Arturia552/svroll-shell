@@ -26,6 +26,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use sysinfo::System;
 use tokio::{io::AsyncReadExt, time::sleep};
+use uuid::Uuid;
 extern crate paho_mqtt as mqtt;
 
 // 全局静态变量，用于存储客户端上下文
@@ -203,11 +204,16 @@ async fn setup_clients(
     let mut clients = vec![];
 
     for client in client_data.iter() {
-        CLIENT_CONTEXT.insert(client.get_client_id().to_string(), client.clone());
+        // CLIENT_CONTEXT.insert(client.get_client_id().to_string(), client.clone());
+        //  生成客户端ID
+        let id = Uuid::new_v4().to_string();
+        let mut cli_data = client.clone();
+        cli_data.set_client_id(id.clone());
+        CLIENT_CONTEXT.insert(cli_data.get_client_id().to_string(), cli_data);
 
         let create_opts = mqtt::CreateOptionsBuilder::new()
             .server_uri(broker.to_string())
-            .client_id(client.get_client_id())
+            .client_id(id)
             .finalize();
         let cli: mqtt::AsyncClient = mqtt::AsyncClient::new(create_opts)?;
 
@@ -223,7 +229,7 @@ async fn setup_clients(
         clients.push(cli.clone());
 
         tokio::spawn(async move {
-            cli.connect_with_callbacks(conn_opts, on_connect_success, on_connect_failure)
+            cli.connect_with_callbacks(conn_opts, on_connect_success, on_connect_failure);
         });
     }
 
@@ -293,7 +299,6 @@ async fn spawn_message_threads(
                                 return;
                             }
                         };
-
                         // 创建带有主题和负载的MQTT消息
                         let payload: mqtt::Message = mqtt::Message::new(
                             real_topic,
@@ -349,7 +354,7 @@ fn on_connect_success(cli: &mqtt::AsyncClient, _msgid: u16) {
 
 /// 连接失败的回调函数
 fn on_connect_failure(_cli: &mqtt::AsyncClient, _msgid: u16, rc: i32) {
-    println!("尝试连接失败，错误码为 {}.", rc);
+    println!("尝试连接失败，错误码为 {}.", _msgid);
 }
 
 /// 消息回调函数
