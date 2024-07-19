@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use tokio::{fs::File, io::AsyncReadExt};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TopicInfo {
@@ -108,8 +109,43 @@ impl TopicWrap {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(tag = "topics")]
 pub struct TotalTopics {
     pub register: Option<TopicWrap>,
     pub data: Option<TopicWrap>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct MqttConfig {
+    pub topic: Option<TotalTopics>,
+}
+
+impl MqttConfig {
+
+    pub fn get_register_topic(&self) -> Option<&str> {
+        self.topic.as_ref().and_then(|topics| topics.register.as_ref().map(|topic| topic.get_publish_topic()))
+    }
+
+
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TcpConfig {
+
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Config {
+    pub mqtt: Option<MqttConfig>,
+    pub tcp: Option<TcpConfig>,
+}
+
+
+
+
+pub async fn load_config(file_path: &str) -> Result<Config, Box<dyn std::error::Error>> {
+    let mut file = File::open(file_path).await.unwrap();
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).await?;
+    let config: Config = serde_yaml::from_str(&contents)?;
+    Ok(config)
 }

@@ -1,10 +1,11 @@
 mod basic;
-mod tcp_client;
 mod client_data;
+mod command;
 mod device_data;
 pub mod random_value;
-mod traits;
+mod tcp_client;
 mod tcp_data;
+mod traits;
 use std::{
     fmt::Debug,
     fs::File,
@@ -15,10 +16,11 @@ use std::{
     time::Duration,
 };
 
-use basic::{TopicWrap, TotalTopics};
+use basic::TopicWrap;
 use chrono::{DateTime, Local};
-use clap::{value_parser, Arg, Command};
+use clap::Parser;
 use client_data::ClientData;
+use command::{ConfigCommand, Protocol};
 use dashmap::DashMap;
 use device_data::DeviceData;
 use mqtt::Message;
@@ -27,7 +29,6 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use sysinfo::System;
 use tokio::{io::AsyncReadExt, time::sleep};
-use uuid::Uuid;
 extern crate paho_mqtt as mqtt;
 
 // 全局静态变量，用于存储客户端上下文
@@ -41,166 +42,99 @@ static ENABLE_REGISTER: OnceCell<bool> = OnceCell::new();
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 解析命令行参数
-    let matches = parse_args();
+    let command_matches = ConfigCommand::parse();
 
-    // 获取命令行参数的值
-    let data_file_path: &String = matches.get_one::<String>("data-file").unwrap();
-    let topic_file_path: &String = matches.get_one::<String>("topic-file").unwrap();
-    let client_file_path = matches.get_one::<String>("client-file").unwrap();
-    let setting_thread_size = matches.get_one::<usize>("thread-size").unwrap();
-    let setting_broker = matches.get_one::<String>("broker").unwrap();
-    let setting_send_interval = matches.get_one::<u64>("send-interval").unwrap();
-    let enable_register = matches.get_one::<bool>("enable-register").unwrap();
+    let protocol_type = command_matches.protocol_type;
 
-    let msg = get_data_from_json_file::<DeviceData>(data_file_path).await?;
-    let topics = get_data_from_json_file::<TotalTopics>(topic_file_path).await?;
+    let msg = get_data_from_json_file::<DeviceData>(command_matches.data_file.as_str()).await?;
+    let config = basic::load_config(command_matches.topic_file.as_str()).await?;
+    let mqtt_config = config.mqtt.unwrap_or_else(|| panic!("没有配置"));
 
-    if let Some(register) = topics.register {
-        let _ = REGISTER_INFO.set(register);
-    } else {
-        println!("No register data");
-    }
+    match protocol_type {
+        Protocol::Mqtt => {
+            if let Some(topic) = mqtt_config.topic {
+                if let Some(register) = topic.register {
+                    let _ = REGISTER_INFO.set(register);
+                } else {
+                    println!("无注册包配置");
+                }
+                if let Some(data) = topic.data {
+                    let _ = DATA_INFO.set(data);
+                } else {
+                    println!("No data");
+                }
+            } else {
+                println!("无mqtt topic配置信息");
+            }
 
-    if let Some(data) = topics.data {
-        let _ = DATA_INFO.set(data);
-    } else {
-        println!("No data");
-    }
+            let _ = ENABLE_REGISTER.set(command_matches.enable_register);
 
-    let _ = ENABLE_REGISTER.set(*enable_register);
+            // 读取CSV文件，获取消息内容和客户端数据
+            let client_data =
+                read_from_csv_into_struct::<ClientData>(command_matches.client_file.as_str())?;
 
-    // 读取CSV文件，获取消息内容和客户端数据
-    let client_data = read_from_csv_into_struct::<ClientData>(client_file_path)?;
+            // 设置MQTT客户端
+            let clients = setup_clients(&client_data, command_matches.broker).await?;
 
-    // 设置MQTT客户端
-    let clients = setup_clients(&client_data, setting_broker).await?;
+            println!("等待连接...");
 
-    println!("等待连接...");
+            // 等待所有客户端连接成功
+            wait_for_connections(&clients).await;
 
-    // 等待所有客户端连接成功
-    wait_for_connections(&clients).await;
+            println!("客户端已全部连接!");
 
-    println!("客户端已全部连接!");
+            // 用于统计发送消息数量的计数器
+            let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
 
-    // 用于统计发送消息数量的计数器
-    let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+            // 启动发送消息的线程
+            spawn_message_threads(
+                clients,
+                msg,
+                counter.clone(),
+                command_matches.thread_size,
+                command_matches.send_interval,
+            )
+            .await;
 
-    // 启动发送消息的线程
-    spawn_message_threads(
-        clients,
-        msg,
-        counter.clone(),
-        *setting_thread_size,
-        *setting_send_interval,
-    )
-    .await;
+            // 初始化系统信息获取器
+            let mut sys = System::new_all();
+            let pid = sysinfo::get_current_pid().expect("Failed to get current PID");
 
-    // 初始化系统信息获取器
-    let mut sys = System::new_all();
-    let pid = sysinfo::get_current_pid().expect("Failed to get current PID");
+            // 循环输出已发送的消息数和系统信息
+            loop {
+                sys.refresh_all();
 
-    // 循环输出已发送的消息数和系统信息
-    loop {
-        sys.refresh_all();
+                // 获取当前应用程序的CPU和内存使用信息
+                if let Some(process) = sys.process(pid) {
+                    let cpu_usage = process.cpu_usage();
+                    let memory_used = process.memory();
+                    print!("\x1B[2J\x1B[H");
+                    println!("已发送消息数: {}", counter.load(Ordering::SeqCst));
+                    println!("CPU使用率: {:.2}%", cpu_usage);
+                    // 转化为MB并打印
+                    let memory_used = memory_used / 1024 / 1024;
+                    println!("内存使用: {} MB", memory_used);
+                } else {
+                    println!("无法获取当前进程的信息");
+                }
 
-        // 获取当前应用程序的CPU和内存使用信息
-        if let Some(process) = sys.process(pid) {
-            let cpu_usage = process.cpu_usage();
-            let memory_used = process.memory();
-
-            println!("已发送消息数: {}", counter.load(Ordering::SeqCst));
-            println!("CPU使用率: {:.2}%", cpu_usage);
-            // 转化为MB并打印
-            let memory_used = memory_used / 1024 / 1024;
-            println!("内存使用: {} MB", memory_used);
-            println!("-----------------")
-        } else {
-            println!("无法获取当前进程的信息");
+                sleep(Duration::from_secs(1)).await;
+            }
         }
+        Protocol::Tcp => {
+            todo!()
 
-        sleep(Duration::from_secs(1)).await;
+
+        }
     }
-}
 
-/// 解析命令行参数
-fn parse_args() -> clap::ArgMatches {
-    Command::new("Mqtt Benchmark")
-        .version("1.0")
-        .author("arturia zheng")
-        .about("mqtt benchmark")
-        .arg(
-            Arg::new("data-file")
-                .short('d')
-                .long("data-file")
-                .value_name("FILE")
-                .required(false)
-                .default_value("./data.json")
-                .help("设置需发送的数据文件路径,默认为当前目录下的data.json"),
-        )
-        .arg(
-            Arg::new("topic-file")
-                .short('o')
-                .long("topic-file")
-                .value_name("FILE")
-                .required(false)
-                .default_value("./topic.json")
-                .help("设置需发送的数据文件路径,默认为当前目录下的topic.json"),
-        )
-        .arg(
-            Arg::new("client-file")
-                .short('c')
-                .long("client-file")
-                .value_name("FILE")
-                .required(false)
-                .default_value("./client.csv")
-                .help("设置客户端文件,默认为当前目录下的client.csv"),
-        )
-        .arg(
-            Arg::new("thread-size")
-                .short('t')
-                .long("thread-size")
-                .value_parser(value_parser!(usize))
-                .value_name("THREAD")
-                .required(false)
-                .default_value("200")
-                .help("设置启动协程数量,默认为200"),
-        )
-        .arg(
-            Arg::new("enable-register")
-                .short('r')
-                .long("enable-register")
-                .value_parser(value_parser!(bool))
-                .value_name("REGISTER")
-                .required(true)
-                .default_value("true")
-                .help("设置是否启用注册包机制"),
-        )
-        .arg(
-            Arg::new("broker")
-                .short('b')
-                .long("broker")
-                .value_name("BROKER")
-                .required(false)
-                .default_value("mqtt://localhost:1883")
-                .help("设置mqtt broker地址,默认为mqtt://localhost:1883"),
-        )
-        .arg(
-            Arg::new("send-interval")
-                .short('i')
-                .long("send-interval")
-                .value_parser(value_parser!(u64))
-                .value_name("INTERVAL")
-                .required(false)
-                .default_value("1")
-                .help("设置发送间隔,默认为1秒"),
-        )
-        .get_matches()
+    Ok(())
 }
 
 /// 设置MQTT客户端
 async fn setup_clients(
     client_data: &[ClientData],
-    broker: &str,
+    broker: String,
 ) -> Result<Vec<mqtt::AsyncClient>, Box<dyn std::error::Error>> {
     let mut clients = vec![];
 
@@ -208,7 +142,7 @@ async fn setup_clients(
         CLIENT_CONTEXT.insert(client.get_client_id().to_string(), client.clone());
 
         let create_opts = mqtt::CreateOptionsBuilder::new()
-            .server_uri(broker.to_string())
+            .server_uri(broker.as_str())
             .client_id(&client.client_id)
             .finalize();
         let cli: mqtt::AsyncClient = mqtt::AsyncClient::new(create_opts)?;
@@ -283,7 +217,11 @@ async fn spawn_message_threads(
                     let client_id = cli.client_id().to_string();
                     if let Some(client_data) = CLIENT_CONTEXT.get(&client_id) {
                         // 创建发布的主题
-
+                        let device_key = client_data.get_device_key();
+                        if device_key.is_empty() {
+                            on_connect_success(&cli).await;
+                            continue;
+                        }
                         let real_topic =
                             topic.get_publish_real_topic(Some(client_data.get_device_key()));
                         // 获取当前本地时间
@@ -319,7 +257,7 @@ async fn spawn_message_threads(
     }
 }
 
-/// 连接成功的回调函数
+/// 连接成功后执行的函数
 async fn on_connect_success(cli: &mqtt::AsyncClient) {
     // 注册包机制启用判断
     if let Some(enable) = ENABLE_REGISTER.get() {
@@ -356,11 +294,6 @@ async fn on_connect_success(cli: &mqtt::AsyncClient) {
             }
         }
     }
-}
-
-/// 连接失败的回调函数
-fn on_connect_failure(_cli: &mqtt::AsyncClient, _msgid: u16, rc: i32) {
-    println!("尝试连接失败，错误码为 {}.", _msgid);
 }
 
 /// 消息回调函数
