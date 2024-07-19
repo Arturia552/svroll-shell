@@ -1,9 +1,10 @@
 mod basic;
+mod tcp_client;
 mod client_data;
 mod device_data;
 pub mod random_value;
 mod traits;
-
+mod tcp_data;
 use std::{
     fmt::Debug,
     fs::File,
