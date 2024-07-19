@@ -204,24 +204,19 @@ async fn setup_clients(
     let mut clients = vec![];
 
     for client in client_data.iter() {
-        // CLIENT_CONTEXT.insert(client.get_client_id().to_string(), client.clone());
-        //  生成客户端ID
-        let id = Uuid::new_v4().to_string();
-        let mut cli_data = client.clone();
-        cli_data.set_client_id(id.clone());
-        CLIENT_CONTEXT.insert(cli_data.get_client_id().to_string(), cli_data);
+        CLIENT_CONTEXT.insert(client.get_client_id().to_string(), client.clone());
 
         let create_opts = mqtt::CreateOptionsBuilder::new()
             .server_uri(broker.to_string())
-            .client_id(id.clone())
+            .client_id(&client.client_id)
             .finalize();
         let cli: mqtt::AsyncClient = mqtt::AsyncClient::new(create_opts)?;
 
         let conn_opts = mqtt::ConnectOptionsBuilder::new_v5()
             .clean_start(true)
             .automatic_reconnect(Duration::from_secs(2), Duration::from_secs(2))
-            .keep_alive_interval(Duration::from_secs(30))
-            .user_name(id)
+            .keep_alive_interval(Duration::from_secs(20))
+            .user_name(&client.client_id)
             .password(client.get_password())
             .finalize();
 
@@ -229,7 +224,12 @@ async fn setup_clients(
 
         clients.push(cli.clone());
 
-        cli.connect_with_callbacks(conn_opts, on_connect_success, on_connect_failure);
+        tokio::spawn(async move {
+            cli.connect(conn_opts).await.unwrap();
+            on_connect_success(&cli).await;
+        });
+
+        tokio::time::sleep(Duration::from_nanos(2)).await;
     }
 
     Ok(clients)
@@ -276,6 +276,9 @@ async fn spawn_message_threads(
             loop {
                 // 遍历每个组中的客户端
                 for cli in group.iter() {
+                    if !cli.is_connected() {
+                        continue;
+                    }
                     let client_id = cli.client_id().to_string();
                     if let Some(client_data) = CLIENT_CONTEXT.get(&client_id) {
                         // 创建发布的主题
@@ -316,7 +319,7 @@ async fn spawn_message_threads(
 }
 
 /// 连接成功的回调函数
-fn on_connect_success(cli: &mqtt::AsyncClient, _msgid: u16) {
+async fn on_connect_success(cli: &mqtt::AsyncClient) {
     // 注册包机制启用判断
     if let Some(enable) = ENABLE_REGISTER.get() {
         if *enable {
@@ -326,6 +329,18 @@ fn on_connect_success(cli: &mqtt::AsyncClient, _msgid: u16) {
             // 将JSON对象序列化为字符串，并处理可能的错误
             match serde_json::to_string(&sn_json) {
                 Ok(sn_json_str) => {
+                    // 创建订阅主题并订阅
+                    let sub_topic = REGISTER_INFO.get().unwrap();
+
+                    if sub_topic.is_exist_subscribe() {
+                        let sub_topic_str =
+                            sub_topic.get_subscribe_real_topic(Some(cli.client_id().as_str()));
+
+                        let _ = cli
+                            .subscribe(sub_topic_str, sub_topic.get_subscribe_qos())
+                            .await;
+                    }
+
                     // 创建注册消息并发布
                     let pub_topic = REGISTER_INFO.get().unwrap();
                     let pub_topic_str = pub_topic.get_publish_topic();
@@ -333,15 +348,6 @@ fn on_connect_success(cli: &mqtt::AsyncClient, _msgid: u16) {
                     let register_msg =
                         mqtt::Message::new(pub_topic_str, sn_json_str, pub_topic.get_publish_qos());
                     cli.publish(register_msg);
-
-                    // 创建订阅主题并订阅
-                    let sub_topic = REGISTER_INFO.get().unwrap();
-
-                    if sub_topic.is_exist_subscribe() {
-                        let sub_topic_str =
-                            sub_topic.get_subscribe_real_topic(Some(cli.client_id().as_str()));
-                        cli.subscribe(sub_topic_str, sub_topic.get_subscribe_qos());
-                    }
                 }
                 Err(e) => {
                     eprintln!("设备注册失败，失败信息： {}", e);
@@ -366,8 +372,7 @@ fn on_message_callback(_: &mqtt::AsyncClient, msg: Option<Message>) {
             // 获取真实的主题和MAC地址
             let (real_topic, mac) = get_real_topic_mac(topic);
             let data = msg.payload(); // 获取消息负载
-
-            // 尝试将负载解析为JSON
+                                      // 尝试将负载解析为JSON
             if let Ok(data) = serde_json::from_slice::<serde_json::Value>(data) {
                 if let Some(enable) = ENABLE_REGISTER.get() {
                     if *enable {
