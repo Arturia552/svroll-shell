@@ -17,7 +17,7 @@ impl Decoder for RequestCodec {
     type Error = std::io::Error;
 
     fn decode(&mut self, src: &mut bytes::BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if (src.len() < 4) {
+        if src.len() < 4 {
             return Ok(None);
         }
 

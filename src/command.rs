@@ -6,11 +6,17 @@ pub enum Protocol {
     Tcp,
 }
 
-#[derive(Parser, Debug)]
-#[command(name = "Mqtt Benchmark")]
+#[derive(Debug, Clone, ValueEnum)]
+pub enum Flag {
+    True,
+    False,
+}
+
+#[derive(Parser, Debug, Clone)]
+#[command(name = "Iot Benchmark")]
 #[command(version = "1.0")]
 #[command(author = "arturia zheng")]
-#[command(about = "mqtt benchmark")]
+#[command(about = "Iot benchmark")]
 pub struct ConfigCommand {
     /// 设置需发送的数据文件路径,默认为当前目录下的data.json
     #[arg(
@@ -33,16 +39,6 @@ pub struct ConfigCommand {
     )]
     pub protocol_type: Protocol,
 
-    /// 设置需发送的数据文件路径,默认为当前目录下的topic.json
-    #[arg(
-        short = 'o',
-        long,
-        value_name = "FILE",
-        default_value = "./topic.json",
-        help = "设置需发送的数据文件路径,默认为当前目录下的topic.json"
-    )]
-    pub topic_file: String,
-
     /// 设置客户端文件,默认为当前目录下的client.csv
     #[arg(
         short = 'c',
@@ -54,12 +50,19 @@ pub struct ConfigCommand {
     pub client_file: String,
 
     /// 设置启动协程数量,默认为200
-    #[arg(short, long, value_parser = clap::value_parser!(usize), default_value_t = 200,help="设置启动协程数量,默认为200")]
+    #[arg(short = 't', long, value_parser = clap::value_parser!(usize), default_value_t = 200,help="设置启动协程数量,默认为200")]
     pub thread_size: usize,
 
     /// 设置是否启用注册包机制
-    #[arg(short = 'r', long, value_parser = clap::value_parser!(bool), default_value_t = true,help="设置是否启用注册包机制")]
-    pub enable_register: bool,
+    #[arg(
+        short = 'r',
+        long,
+        value_name = "Flag",
+        value_enum,
+        default_value = "true",
+        help = "设置是否启用注册包机制,默认为false"
+    )]
+    pub enable_register: Flag,
 
     /// 设置mqtt broker地址,默认为mqtt://localhost:1883
     #[arg(

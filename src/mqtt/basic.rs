@@ -140,8 +140,6 @@ pub struct Config {
 }
 
 
-
-
 pub async fn load_config(file_path: &str) -> Result<Config, Box<dyn std::error::Error>> {
     let mut file = File::open(file_path).await.unwrap();
     let mut contents = String::new();
@@ -149,3 +147,5 @@ pub async fn load_config(file_path: &str) -> Result<Config, Box<dyn std::error::
     let config: Config = serde_yaml::from_str(&contents)?;
     Ok(config)
 }
+
+
