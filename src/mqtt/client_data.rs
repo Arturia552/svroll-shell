@@ -77,14 +77,21 @@ impl Client<ClientData> for MqttClient {
 
     async fn setup_clients(
         &self,
-        client_data: &[ClientData],
+        client_data: &mut [ClientData],
         broker: String,
     ) -> Result<Vec<AsyncClient>, Box<dyn std::error::Error>> {
         let mut clients = vec![];
 
-        for client in client_data.iter() {
-            CLIENT_CONTEXT.insert(client.get_client_id().to_string(), client.clone());
+        let mut enable_register = false;
 
+        if let Some(enable) = ENABLE_REGISTER.get() {
+            if *enable {
+                enable_register = true;
+            }
+        }
+        for client in client_data.iter_mut() {
+            client.set_enable_register(enable_register);
+            CLIENT_CONTEXT.insert(client.get_client_id().to_string(), client.clone());
             let create_opts = CreateOptionsBuilder::new()
                 .server_uri(broker.as_str())
                 .client_id(&client.client_id)
@@ -195,37 +202,33 @@ impl Client<ClientData> for MqttClient {
                         if let Some(client_data) = CLIENT_CONTEXT.get(&client_id) {
                             // 创建发布的主题
                             let device_key = client_data.get_device_key();
-                            if device_key.is_empty() {
+                            if device_key.is_empty() && client_data.is_enable_register() {
                                 Self::on_connect_success(&cli).await;
-                            } else {
-                                let real_topic = topic
-                                    .get_publish_real_topic(Some(client_data.get_device_key()));
-                                // 获取当前本地时间
-                                let now: DateTime<Local> = Local::now();
-                                // 格式化时间用于消息
-                                let formatted_time =
-                                    now.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
-
-                                let mut msg_value = msg_value.clone(); // 克隆消息数据
-                                msg_value.set_timestamp(formatted_time.into()); // 设置时间戳
-
-                                // 将消息数据序列化为JSON
-                                let json_msg = match serde_json::to_string(&msg_value) {
-                                    Ok(msg) => msg,
-                                    Err(e) => {
-                                        eprintln!("序列化JSON失败: {}", e);
-                                        return;
-                                    }
-                                };
-                                // 创建带有主题和负载的MQTT消息
-                                let payload: Message = Message::new(
-                                    real_topic,
-                                    json_msg.clone(),
-                                    topic.get_publish_qos(),
-                                );
-                                counter.fetch_add(1, Ordering::SeqCst); // 增加计数器
-                                let _ = cli.publish(payload); // 发布消息
+                                continue;
                             }
+                            let real_topic =
+                                topic.get_publish_real_topic(Some(client_data.get_device_key()));
+                            // 获取当前本地时间
+                            let now: DateTime<Local> = Local::now();
+                            // 格式化时间用于消息
+                            let formatted_time = now.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+
+                            let mut msg_value = msg_value.clone(); // 克隆消息数据
+                            msg_value.set_timestamp(formatted_time.into()); // 设置时间戳
+
+                            // 将消息数据序列化为JSON
+                            let json_msg = match serde_json::to_string(&msg_value) {
+                                Ok(msg) => msg,
+                                Err(e) => {
+                                    eprintln!("序列化JSON失败: {}", e);
+                                    return;
+                                }
+                            };
+                            // 创建带有主题和负载的MQTT消息
+                            let payload: Message =
+                                Message::new(real_topic, json_msg.clone(), topic.get_publish_qos());
+                            counter.fetch_add(1, Ordering::SeqCst); // 增加计数器
+                            let _ = cli.publish(payload); // 发布消息
                         }
                     }
                     // 等待指定的间隔时间再进行下一次发送
@@ -251,18 +254,10 @@ pub struct ClientData {
     pub password: String,
     #[serde(skip)]
     pub device_key: String,
+    pub enable_register: bool,
 }
 
 impl ClientData {
-    pub fn new(client_id: String, username: String, password: String, device_key: String) -> Self {
-        ClientData {
-            client_id,
-            username,
-            password,
-            device_key,
-        }
-    }
-
     pub fn get_client_id(&self) -> &str {
         &self.client_id
     }
@@ -285,6 +280,14 @@ impl ClientData {
 
     pub fn set_device_key(&mut self, device_key: String) {
         self.device_key = device_key;
+    }
+
+    pub fn set_enable_register(&mut self, enable_register: bool) {
+        self.enable_register = enable_register;
+    }
+
+    pub fn is_enable_register(&self) -> bool {
+        self.enable_register
     }
 
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {

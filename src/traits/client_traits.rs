@@ -8,7 +8,7 @@ where
 
     fn setup_clients(
         &self,
-        client_data: &[T],
+        client_data: &mut [T],
         broker: String,
     ) -> impl std::future::Future<Output = Result<Vec<Self::Item>, Box<dyn std::error::Error>>> + Send;
 

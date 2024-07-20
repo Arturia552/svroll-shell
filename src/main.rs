@@ -36,13 +36,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             init_context(&command_matches, mqtt_config)?;
 
             // 读取CSV文件，获取消息内容和客户端数据
-            let client_data: Vec<ClientData> =
+            let mut client_data: Vec<ClientData> =
                 read_from_csv_into_struct::<ClientData>(command_matches.client_file.as_str())?;
 
             // 设置MQTT客户端
             let mqtt_client = MqttClient::new(msg);
             let clients = mqtt_client
-                .setup_clients(&client_data, command_matches.broker)
+                .setup_clients(&mut client_data, command_matches.broker)
                 .await?;
 
             println!("等待连接...");
