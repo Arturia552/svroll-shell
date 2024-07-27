@@ -1,5 +1,7 @@
 use bytes::Buf;
-use tokio_util::codec::{Decoder, Encoder, FramedRead, FramedWrite};
+use tokio_util::codec::{Decoder, Encoder};
+
+pub struct TcpConn {}
 
 #[derive(Debug)]
 pub struct RequestData {
@@ -35,7 +37,6 @@ impl Decoder for RequestCodec {
         Ok(Some(req))
     }
 }
-
 
 pub struct ResponseCodec;
 

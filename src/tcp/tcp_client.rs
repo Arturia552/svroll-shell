@@ -4,6 +4,18 @@ use tokio_util::codec::FramedRead;
 
 use super::tcp_client_data::RequestCodec;
 
+
+
+pub struct TcpClient {}
+
+
+
+
+
+
+
+
+
 async fn start_tcp_client(host: String) {
     if let Ok(conn) = TcpStream::connect(host).await {
         tokio::spawn(async move {

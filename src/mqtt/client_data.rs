@@ -183,7 +183,7 @@ impl Client<ClientData> for MqttClient {
 
         // 遍历每个客户端组
         for group in clients_group {
-            let group = group.to_vec(); // 将组转换为向量以获得所有权
+            let group = group.to_vec(); // 将组转换为数组以获得所有权
             let msg_value: DeviceData = self.send_data.clone(); // 克隆消息数据
             let counter: Arc<AtomicU32> = counter.clone(); // 克隆原子计数器
             let topic = DATA_INFO.get().unwrap(); // 获取数据上报主题
@@ -254,6 +254,7 @@ pub struct ClientData {
     pub password: String,
     #[serde(skip)]
     pub device_key: String,
+    #[serde(skip)]
     pub enable_register: bool,
 }
 
