@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("等待连接...");
 
             // 等待所有客户端连接成功
-            // MqttClient::wait_for_connections(&clients).await;
+            MqttClient::wait_for_connections(&clients).await;
 
             println!("客户端已全部连接!");
 
