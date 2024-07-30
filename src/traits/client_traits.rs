@@ -10,6 +10,7 @@ where
         &self,
         client_data: &mut [T],
         broker: String,
+        max_connect_per_second: usize,
     ) -> impl std::future::Future<Output = Result<Vec<Self::Item>, Box<dyn std::error::Error>>> + Send;
 
     fn wait_for_connections( clients: &[Self::Item]) -> impl std::future::Future<Output = ()> + Send;

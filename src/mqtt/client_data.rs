@@ -9,7 +9,10 @@ use std::{
 use chrono::{DateTime, Local};
 use paho_mqtt::{AsyncClient, ConnectOptionsBuilder, CreateOptionsBuilder, Message};
 use serde::Deserialize;
-use tokio::time::sleep;
+use tokio::{
+    sync::Semaphore,
+    time::{sleep, Instant},
+};
 
 use crate::{DeviceData, CLIENT_CONTEXT, DATA_INFO, ENABLE_REGISTER, REGISTER_INFO};
 
@@ -49,7 +52,7 @@ impl MqttClient {
                     if let Some(enable) = ENABLE_REGISTER.get() {
                         if *enable {
                             let register_topic = REGISTER_INFO.get().unwrap();
-                            let reg_sub_topic = register_topic.get_subscribe_topic().unwrap();
+                            let reg_sub_topic = register_topic.get_subscribe_topic().expect("没有配置注册订阅主题");
 
                             // 检查真实主题是否为注册包回复
                             if real_topic == reg_sub_topic {
@@ -79,6 +82,7 @@ impl Client<ClientData> for MqttClient {
         &self,
         client_data: &mut [ClientData],
         broker: String,
+        max_connect_per_second: usize,
     ) -> Result<Vec<AsyncClient>, Box<dyn std::error::Error>> {
         let mut clients = vec![];
 
@@ -89,11 +93,14 @@ impl Client<ClientData> for MqttClient {
                 enable_register = true;
             }
         }
+
+        let semaphore = Arc::new(Semaphore::new(max_connect_per_second));
+
         for client in client_data.iter_mut() {
             client.set_enable_register(enable_register);
             CLIENT_CONTEXT.insert(client.get_client_id().to_string(), client.clone());
             let create_opts = CreateOptionsBuilder::new()
-                .server_uri(broker.as_str())
+                .server_uri(&broker)
                 .client_id(&client.client_id)
                 .finalize();
             let cli: AsyncClient = AsyncClient::new(create_opts)?;
@@ -112,16 +119,25 @@ impl Client<ClientData> for MqttClient {
 
             clients.push(cli.clone());
 
+            let semaphore = Arc::clone(&semaphore);
             tokio::spawn(async move {
+                let permit = semaphore.acquire().await.unwrap(); 
+
+                let start = Instant::now();
                 match cli.connect(conn_opts).await {
                     Ok(_) => {
                         Self::on_connect_success(&cli).await;
                     }
                     Err(_) => todo!(),
                 }
-            });
 
-            tokio::time::sleep(Duration::from_nanos(2)).await;
+                let elapsed = start.elapsed();
+                if elapsed < Duration::from_secs(1) {
+                    tokio::time::sleep(Duration::from_secs(1) - elapsed).await;
+                }
+
+                drop(permit); 
+            });
         }
 
         Ok(clients)

@@ -1,10 +1,11 @@
 extern crate iot_benchmark;
 extern crate paho_mqtt as mqtt;
 use clap::Parser;
+use comfy_table::Table;
 use iot_benchmark::{
     command::{ConfigCommand, Protocol},
-    load_config,
-    mqtt::{client_data::MqttClient, context::init_context, Client},
+    init_context, load_config,
+    mqtt::{client_data::MqttClient, Client},
     ClientData, DeviceData,
 };
 use serde::de::DeserializeOwned;
@@ -29,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let msg = get_data_from_json_file::<DeviceData>(command_matches.data_file.as_str()).await?;
     let config = load_config("./config.yaml").await?;
-    let mqtt_config = config.mqtt.unwrap_or_else(|| panic!("没有配置"));
+    let mqtt_config = config.mqtt.expect("没有配置");
 
     match protocol_type {
         Protocol::Mqtt => {
@@ -42,7 +43,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // 设置MQTT客户端
             let mqtt_client = MqttClient::new(msg);
             let clients = mqtt_client
-                .setup_clients(&mut client_data, command_matches.broker)
+                .setup_clients(
+                    &mut client_data,
+                    command_matches.broker,
+                    command_matches.max_connect_per_second,
+                )
                 .await?;
 
             println!("等待连接...");
@@ -71,20 +76,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // 循环输出已发送的消息数和系统信息
             loop {
+                // 刷新系统信息
                 sys.refresh_all();
+
+                // 清空终端
+                print!("\x1B[2J\x1B[1;1H");
+
+                let mut table = Table::new();
+                table.set_header(vec!["指标", "值"]);
 
                 // 获取当前应用程序的CPU和内存使用信息
                 if let Some(process) = sys.process(pid) {
                     let cpu_usage = process.cpu_usage();
                     let memory_used = process.memory();
-                    println!("已发送消息数: {}", counter.load(Ordering::SeqCst));
-                    println!("CPU使用率: {:.2}%", cpu_usage);
-                    // 转化为MB并打印
+                    table.add_row(vec![
+                        "已发送消息数",
+                        counter.load(Ordering::SeqCst).to_string().as_str(),
+                    ]);
+                    table.add_row(vec!["CPU使用率", format!("{:.2}%", cpu_usage).as_str()]);
+                    // 转化为MB并添加到表格
                     let memory_used = memory_used / 1024 / 1024;
-                    println!("内存使用: {} MB", memory_used);
+                    table.add_row(vec!["内存使用", format!("{} MB", memory_used).as_str()]);
                 } else {
-                    println!("无法获取当前进程的信息");
+                    table.add_row(vec!["错误", "无法获取当前进程的信息"]);
                 }
+
+                println!("{}", table);
 
                 sleep(Duration::from_secs(1)).await;
             }

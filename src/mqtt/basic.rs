@@ -74,7 +74,6 @@ impl TopicWrap {
                 let new_topic = new_topic_parts.join("/");
                 Box::leak(new_topic.into_boxed_str())
             } else {
-                // If key_index is out of range, return the original topic.
                 &topic.topic
             }
         }
@@ -120,18 +119,18 @@ pub struct MqttConfig {
 }
 
 impl MqttConfig {
-
     pub fn get_register_topic(&self) -> Option<&str> {
-        self.topic.as_ref().and_then(|topics| topics.register.as_ref().map(|topic| topic.get_publish_topic()))
+        self.topic.as_ref().and_then(|topics| {
+            topics
+                .register
+                .as_ref()
+                .map(|topic| topic.get_publish_topic())
+        })
     }
-
-
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct TcpConfig {
-
-}
+pub struct TcpConfig {}
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Config {
@@ -139,13 +138,10 @@ pub struct Config {
     pub tcp: Option<TcpConfig>,
 }
 
-
 pub async fn load_config(file_path: &str) -> Result<Config, Box<dyn std::error::Error>> {
-    let mut file = File::open(file_path).await.unwrap();
+    let mut file = File::open(file_path).await?;
     let mut contents = String::new();
     file.read_to_string(&mut contents).await?;
     let config: Config = serde_yaml::from_str(&contents)?;
     Ok(config)
 }
-
-

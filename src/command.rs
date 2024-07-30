@@ -74,6 +74,10 @@ pub struct ConfigCommand {
     )]
     pub broker: String,
 
+    /// 每秒最多启动连接数
+    #[arg(short = 'p', long, value_parser = clap::value_parser!(usize), default_value_t = 100,help="每秒最多启动连接数,默认为100")]
+    pub max_connect_per_second: usize,
+
     /// 设置发送间隔,默认为1秒
     #[arg(short = 'i', long, value_parser = clap::value_parser!(u64), default_value_t = 1,help="设置发送间隔,默认为1秒")]
     pub send_interval: u64,

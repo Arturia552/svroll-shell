@@ -1,9 +1,8 @@
 use dashmap::DashMap;
 use once_cell::sync::{Lazy, OnceCell};
 
-use crate::{command::ConfigCommand, ClientData, TopicWrap};
+use crate::{command::ConfigCommand, mqtt::basic::MqttConfig, ClientData, TopicWrap};
 
-use super::basic::MqttConfig;
 
 // 全局静态变量，用于存储客户端上下文
 pub static CLIENT_CONTEXT: Lazy<DashMap<String, ClientData>> = Lazy::new(DashMap::new);
