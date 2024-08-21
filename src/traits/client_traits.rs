@@ -13,10 +13,10 @@ where
         max_connect_per_second: usize,
     ) -> impl std::future::Future<Output = Result<Vec<Self::Item>, Box<dyn std::error::Error>>> + Send;
 
-    fn wait_for_connections( clients: &[Self::Item]) -> impl std::future::Future<Output = ()> + Send;
+    fn wait_for_connections( clients: &mut [Self::Item]) -> impl std::future::Future<Output = ()> + Send;
 
     fn on_connect_success(
-        client: &Self::Item,
+        client: &mut Self::Item,
     ) -> impl std::future::Future<Output = ()> + Send;
     fn spawn_message(
         &self,

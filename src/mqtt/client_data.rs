@@ -52,7 +52,9 @@ impl MqttClient {
                     if let Some(enable) = ENABLE_REGISTER.get() {
                         if *enable {
                             let register_topic = REGISTER_INFO.get().unwrap();
-                            let reg_sub_topic = register_topic.get_subscribe_topic().expect("没有配置注册订阅主题");
+                            let reg_sub_topic = register_topic
+                                .get_subscribe_topic()
+                                .expect("没有配置注册订阅主题");
 
                             // 检查真实主题是否为注册包回复
                             if real_topic == reg_sub_topic {
@@ -103,7 +105,7 @@ impl Client<ClientData> for MqttClient {
                 .server_uri(&broker)
                 .client_id(&client.client_id)
                 .finalize();
-            let cli: AsyncClient = AsyncClient::new(create_opts)?;
+            let mut cli: AsyncClient = AsyncClient::new(create_opts)?;
 
             let conn_opts = ConnectOptionsBuilder::new_v5()
                 .clean_start(true)
@@ -121,12 +123,12 @@ impl Client<ClientData> for MqttClient {
 
             let semaphore = Arc::clone(&semaphore);
             tokio::spawn(async move {
-                let permit = semaphore.acquire().await.unwrap(); 
+                let permit = semaphore.acquire().await.unwrap();
 
                 let start = Instant::now();
                 match cli.connect(conn_opts).await {
                     Ok(_) => {
-                        Self::on_connect_success(&cli).await;
+                        Self::on_connect_success(&mut cli).await;
                     }
                     Err(_) => todo!(),
                 }
@@ -136,14 +138,14 @@ impl Client<ClientData> for MqttClient {
                     tokio::time::sleep(Duration::from_secs(1) - elapsed).await;
                 }
 
-                drop(permit); 
+                drop(permit);
             });
         }
 
         Ok(clients)
     }
 
-    async fn on_connect_success(cli: &Self::Item) {
+    async fn on_connect_success(cli: &mut Self::Item) {
         // 注册包机制启用判断
         if let Some(enable) = ENABLE_REGISTER.get() {
             if *enable {
@@ -199,7 +201,7 @@ impl Client<ClientData> for MqttClient {
 
         // 遍历每个客户端组
         for group in clients_group {
-            let group = group.to_vec(); // 将组转换为数组以获得所有权
+            let mut group = group.to_vec(); // 将组转换为数组以获得所有权
             let msg_value: DeviceData = self.send_data.clone(); // 克隆消息数据
             let counter: Arc<AtomicU32> = counter.clone(); // 克隆原子计数器
             let topic = DATA_INFO.get().unwrap(); // 获取数据上报主题
@@ -209,8 +211,10 @@ impl Client<ClientData> for MqttClient {
                 let mut interval =
                     tokio::time::interval(Duration::from_secs(setting_send_interval));
                 loop {
+                     // 等待指定的间隔时间再进行下一次发送
+                     interval.tick().await;
                     // 遍历每个组中的客户端
-                    for cli in group.iter() {
+                    for cli in group.iter_mut() {
                         if !cli.is_connected() {
                             continue;
                         }
@@ -219,7 +223,7 @@ impl Client<ClientData> for MqttClient {
                             // 创建发布的主题
                             let device_key = client_data.get_device_key();
                             if device_key.is_empty() && client_data.is_enable_register() {
-                                Self::on_connect_success(&cli).await;
+                                Self::on_connect_success(cli).await;
                                 continue;
                             }
                             let real_topic =
@@ -247,14 +251,13 @@ impl Client<ClientData> for MqttClient {
                             let _ = cli.publish(payload); // 发布消息
                         }
                     }
-                    // 等待指定的间隔时间再进行下一次发送
-                    interval.tick().await;
+                   
                 }
             });
         }
     }
 
-    async fn wait_for_connections(clients: &[AsyncClient]) {
+    async fn wait_for_connections(clients: &mut [AsyncClient]) {
         for ele in clients {
             while !ele.is_connected() {
                 sleep(Duration::from_secs(1)).await;

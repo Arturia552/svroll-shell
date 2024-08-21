@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // 设置MQTT客户端
             let mqtt_client = MqttClient::new(msg);
-            let clients = mqtt_client
+            let mut clients = mqtt_client
                 .setup_clients(
                     &mut client_data,
                     command_matches.broker,
@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("等待连接...");
 
             // 等待所有客户端连接成功
-            MqttClient::wait_for_connections(&clients).await;
+            MqttClient::wait_for_connections(&mut clients).await;
 
             println!("客户端已全部连接!");
 
