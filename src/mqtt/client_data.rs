@@ -130,7 +130,7 @@ impl Client<ClientData> for MqttClient {
                     Ok(_) => {
                         Self::on_connect_success(&mut cli).await;
                     }
-                    Err(_) => todo!(),
+                    Err(_) => {},
                 }
 
                 let elapsed = start.elapsed();
