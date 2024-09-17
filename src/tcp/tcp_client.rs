@@ -1,34 +1,49 @@
 use std::{
-    sync::{atomic::AtomicU32, Arc},
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
-use crate::{mqtt::Client, ENABLE_REGISTER};
+use crate::{command::BenchmarkConfig, mqtt::Client, TCP_CLIENT_CONTEXT};
 use serde::Deserialize;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{
-        tcp::{OwnedReadHalf, OwnedWriteHalf},
-        TcpStream,
-    },
+    net::{tcp::OwnedReadHalf, TcpStream},
     sync::Semaphore,
     time::Instant,
 };
 
-#[derive(Debug, Deserialize)]
-pub struct TcpClient {
+#[derive(Debug, Deserialize, Clone)]
+pub struct TcpSendData {
     pub send_data: Vec<u8>,
     pub len_index: usize,
     pub len_size: usize,
+    pub enable_register: bool,
 }
 
-impl TcpClient {
-    pub fn new(send_data: Vec<u8>, len_index: usize, len_size: usize) -> Self {
+impl TcpSendData {
+    pub fn new(
+        send_data: Vec<u8>,
+        len_index: usize,
+        len_size: usize,
+        enable_register: bool,
+    ) -> Self {
         Self {
             send_data,
             len_index,
             len_size,
+            enable_register,
         }
+    }
+
+    pub fn get_enable_register(&self) -> bool {
+        self.enable_register
+    }
+
+    pub fn set_enable_register(&mut self, enable_register: bool) {
+        self.enable_register = enable_register
     }
 
     async fn process_read(mut reader: OwnedReadHalf) {
@@ -51,19 +66,19 @@ impl TcpClient {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct TcpClientData {
     pub mac: String,
-    pub enable_register: bool,
-    pub writer: OwnedWriteHalf,
+    pub is_connected: bool,
+    pub is_register: bool,
 }
 
 impl TcpClientData {
-    pub fn new(mac: String, enable_register: bool, writer: OwnedWriteHalf) -> Self {
+    pub fn new(mac: String) -> Self {
         Self {
             mac,
-            enable_register,
-            writer,
+            is_connected: false,
+            is_register: false,
         }
     }
 
@@ -75,48 +90,44 @@ impl TcpClientData {
         self.mac.clone()
     }
 
-    pub fn get_writer(&mut self) -> &mut OwnedWriteHalf {
-        &mut self.writer
+    pub fn set_is_connected(&mut self, is_connected: bool) {
+        self.is_connected = is_connected;
     }
 
-    pub fn set_writer(&mut self, writer: OwnedWriteHalf) {
-        self.writer = writer;
+    pub fn get_is_connected(&self) -> bool {
+        self.is_connected
+    }
+
+    pub fn set_is_register(&mut self, is_register: bool) {
+        self.is_register = is_register;
+    }
+
+    pub fn get_is_register(&self) -> bool {
+        self.is_register
     }
 }
 
-impl Client<TcpClientData> for TcpClient {
+impl Client<TcpSendData, TcpClientData> for TcpSendData {
     type Item = TcpClientData;
 
     async fn setup_clients(
         &self,
-        client_data: &mut [TcpClientData],
-        host: String,
-        max_connect_per_second: usize,
+        config: &BenchmarkConfig<TcpSendData, TcpClientData>,
     ) -> Result<Vec<TcpClientData>, Box<dyn std::error::Error>> {
-        let mut clients = vec![];
-        let mut enable_register = false;
+        let clients = vec![];
 
-        if let Some(enable) = ENABLE_REGISTER.get() {
-            if *enable {
-                enable_register = true;
-            }
-        }
-        let semaphore = Arc::new(Semaphore::new(max_connect_per_second));
+        let semaphore = Arc::new(Semaphore::new(config.get_max_connect_per_second()));
 
-        for client in client_data.iter_mut() {
+        for client in config.get_clients() {
             let semaphore = Arc::clone(&semaphore);
             let permit = semaphore.acquire().await.unwrap();
 
             let start = Instant::now();
-            let conn = TcpStream::connect(host.clone()).await?;
+            let conn = TcpStream::connect(config.get_broker()).await?;
 
             let (reader, writer) = conn.into_split();
 
-            clients.push(TcpClientData::new(
-                client.get_mac(),
-                enable_register,
-                writer,
-            ));
+            TCP_CLIENT_CONTEXT.insert(client.get_mac(), writer);
             tokio::spawn(async move {
                 Self::process_read(reader).await;
             });
@@ -132,25 +143,24 @@ impl Client<TcpClientData> for TcpClient {
         Ok(clients)
     }
 
-    async fn wait_for_connections(clients: &mut [Self::Item]) {
+    async fn wait_for_connections(&self, clients: &mut [TcpClientData]) {
         for client in clients {
-            let writer = client.get_writer();
-            match writer.writable().await {
-                Ok(_) => {
-                    Self::on_connect_success(client).await;
-                }
-                Err(e) => {
-                    println!("{}", format!("连接失败: {}", e))
+            if let Some(writer) = TCP_CLIENT_CONTEXT.get(&client.get_mac()) {
+                match writer.writable().await {
+                    Ok(_) => {
+                        self.on_connect_success(client).await;
+                    }
+                    Err(e) => {
+                        println!("{}", format!("连接失败: {}", e))
+                    }
                 }
             }
         }
     }
 
-    async fn on_connect_success(client: &mut TcpClientData) {
-        let writer = client.get_writer();
-
-        if let Some(enable) = ENABLE_REGISTER.get() {
-            if *enable {
+    async fn on_connect_success(&self, client: &mut TcpClientData) {
+        if let Some(mut writer) = TCP_CLIENT_CONTEXT.get_mut(&client.get_mac()) {
+            if self.get_enable_register() {
                 // 发送注册包
                 match writer.write("abc".as_bytes()).await {
                     Ok(_) => todo!(),
@@ -164,9 +174,40 @@ impl Client<TcpClientData> for TcpClient {
         &self,
         clients: Vec<Self::Item>,
         counter: Arc<AtomicU32>,
-        thread_size: usize,
-        setting_send_interval: u64,
+        config: &BenchmarkConfig<TcpSendData, TcpClientData>,
     ) {
-        todo!()
+        // 确定每个线程处理的客户端数量
+        let startup_thread_size = clients.len() / config.thread_size
+        + if clients.len() % config.thread_size != 0 {
+            1
+        } else {
+            0
+        };
+        // 按线程大小将客户端分组
+        let clients_group = clients.chunks(startup_thread_size);
+
+        for group in clients_group {
+            let mut groups = group.to_vec();
+            let msg_value = self.send_data.clone();
+            let counter = counter.clone();
+            let send_interval = config.get_send_interval();
+            let enable_register = self.get_enable_register();
+
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(send_interval));
+                loop {
+                    interval.tick().await;
+                    for client in groups.iter_mut() {
+                        if let Some(mut writer) = TCP_CLIENT_CONTEXT.get_mut(&client.get_mac()) {
+                            if enable_register && writer.writable().await.is_ok() {
+                                let msg = msg_value.clone();
+                                let _ = writer.write(&msg).await;
+                                counter.fetch_add(1, Ordering::SeqCst);
+                            }
+                        }
+                    }
+                }
+            });
+        }
     }
 }

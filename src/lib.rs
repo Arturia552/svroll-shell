@@ -8,4 +8,4 @@ pub use mqtt::client_data::ClientData;
 pub use mqtt::basic::{TopicWrap,load_config};
 pub use mqtt::device_data::DeviceData;
 
-pub use context::{CLIENT_CONTEXT, REGISTER_INFO, DATA_INFO, ENABLE_REGISTER,init_context};
+pub use context::{CLIENT_CONTEXT,init_mqtt_context,TCP_CLIENT_CONTEXT};
