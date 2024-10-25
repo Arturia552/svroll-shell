@@ -30,6 +30,31 @@ pub struct TopicWrap {
     pub subscribe: Option<TopicInfo>, // 使用 Option 来处理可能不存在的字段
 }
 
+pub fn wrap_real_topic<'a>(topic: &'a TopicInfo, key_value: Option<&str>) -> &'a str {
+    if topic.key_index.unwrap_or(0) == 0
+        || key_value.is_none()
+        || key_value.is_some_and(|val| val.is_empty())
+    {
+        &topic.topic
+    } else {
+        let key_index = topic.key_index.unwrap_or(0);
+        let parts: Vec<&str> = topic.topic.split('/').collect();
+
+        if key_index < parts.len() {
+            let mut new_topic_parts = parts[..key_index].to_vec();
+            if let Some(value) = key_value {
+                new_topic_parts.push(value);
+            }
+            new_topic_parts.extend(&parts[key_index..]);
+
+            let new_topic = new_topic_parts.join("/");
+            Box::leak(new_topic.into_boxed_str())
+        } else {
+            &topic.topic
+        }
+    }
+}
+
 impl TopicWrap {
     pub fn is_exist_subscribe(&self) -> bool {
         self.subscribe.is_some()
@@ -55,55 +80,12 @@ impl TopicWrap {
 
     pub fn get_publish_real_topic(&self, key_value: Option<&str>) -> &str {
         let topic = &self.publish;
-        if topic.key_index.unwrap_or(0) == 0
-            || key_value.is_none()
-            || key_value.is_some_and(|val| val.is_empty())
-        {
-            &topic.topic
-        } else {
-            let key_index = topic.key_index.unwrap_or(0);
-            let parts: Vec<&str> = topic.topic.split('/').collect();
-
-            if key_index < parts.len() {
-                let mut new_topic_parts = parts[..key_index].to_vec();
-                if let Some(value) = key_value {
-                    new_topic_parts.push(value);
-                }
-                new_topic_parts.extend(&parts[key_index..]);
-
-                let new_topic = new_topic_parts.join("/");
-                Box::leak(new_topic.into_boxed_str())
-            } else {
-                &topic.topic
-            }
-        }
+        wrap_real_topic(topic, key_value)
     }
 
     pub fn get_subscribe_real_topic(&self, key_value: Option<&str>) -> &str {
         let topic = self.subscribe.as_ref().unwrap();
-
-        if topic.key_index.unwrap_or(0) == 0
-            || key_value.is_none()
-            || key_value.is_some_and(|val| val.is_empty())
-        {
-            &topic.topic
-        } else {
-            let key_index = topic.key_index.unwrap_or(0);
-            let parts: Vec<&str> = topic.topic.split('/').collect();
-
-            if key_index < parts.len() {
-                let mut new_topic_parts = parts[..key_index].to_vec();
-                if let Some(value) = key_value {
-                    new_topic_parts.push(value);
-                }
-                new_topic_parts.extend(&parts[key_index..]);
-
-                let new_topic = new_topic_parts.join("/");
-                Box::leak(new_topic.into_boxed_str())
-            } else {
-                &topic.topic
-            }
-        }
+        wrap_real_topic(topic, key_value)
     }
 }
 
