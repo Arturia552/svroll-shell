@@ -113,10 +113,14 @@ pub struct BenchmarkConfig<T, C> {
 
 impl<T, C> BenchmarkConfig<T, C>
 where
-    T: DeserializeOwned + Debug,
-    C: DeserializeOwned + Debug,
+    T: Debug,
+    C: Debug,
 {
-    pub async fn from_config(config: CommandConfig) -> Result<BenchmarkConfig<T, C>> {
+    pub async fn from_config(config: CommandConfig) -> Result<BenchmarkConfig<T, C>>
+    where
+        T: DeserializeOwned + Debug,
+        C: DeserializeOwned + Debug,
+    {
         let data = load_send_data_from_json_file(&config.data_file).await?;
         let clients = read_from_csv_into_struct(&config.client_file).await?;
         Ok(Self {

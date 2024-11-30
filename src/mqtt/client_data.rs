@@ -9,6 +9,7 @@ use std::{
 use chrono::{DateTime, Local};
 use paho_mqtt::{AsyncClient, ConnectOptionsBuilder, CreateOptionsBuilder, Message};
 use serde::Deserialize;
+use serde_json::{json, Value};
 use tokio::{
     sync::Semaphore,
     time::{sleep, Instant},
@@ -17,12 +18,12 @@ use tokio::{
 use crate::{command::BenchmarkConfig, DeviceData, TopicWrap, CLIENT_CONTEXT};
 
 use super::Client;
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub struct MqttClient {
-    pub send_data: DeviceData,
+    pub send_data: Arc<DeviceData>,
     pub enable_register: bool,
-    pub register_topic: TopicWrap,
-    pub data_topic: TopicWrap,
+    pub register_topic: Arc<TopicWrap>,
+    pub data_topic: Arc<TopicWrap>,
 }
 
 impl MqttClient {
@@ -33,10 +34,10 @@ impl MqttClient {
         data_topic: TopicWrap,
     ) -> Self {
         MqttClient {
-            send_data,
+            send_data: Arc::new(send_data),
             enable_register,
-            register_topic,
-            data_topic,
+            register_topic: Arc::new(register_topic),
+            data_topic: Arc::new(data_topic),
         }
     }
 
@@ -53,7 +54,7 @@ impl MqttClient {
     }
 
     pub fn set_register_topic(&mut self, topic: TopicWrap) {
-        self.register_topic = topic;
+        self.register_topic = Arc::new(topic);
     }
 
     pub fn get_register_topic(&self) -> &TopicWrap {
@@ -61,7 +62,7 @@ impl MqttClient {
     }
 
     pub fn set_data_topic(&mut self, topic: TopicWrap) {
-        self.data_topic = topic;
+        self.data_topic = Arc::new(topic);
     }
 
     pub fn get_data_topic(&self) -> &TopicWrap {
@@ -222,11 +223,11 @@ impl Client<DeviceData, ClientData> for MqttClient {
         // 遍历每个客户端组
         for group in clients_group {
             let mut group = group.to_vec(); // 将组转换为数组以获得所有权
-            let msg_value: DeviceData = self.send_data.clone(); // 克隆消息数据
+            let send_data = Arc::clone(&self.send_data);
             let counter: Arc<AtomicU32> = counter.clone(); // 克隆原子计数器
             let mqtt_client = self.clone();
             let send_interval = config.get_send_interval();
-            let topic = mqtt_client.get_data_topic().clone();
+            let topic = Arc::clone(&self.data_topic);
 
             // 为每个客户端组生成一个异步任务
             tokio::spawn(async move {
@@ -234,6 +235,9 @@ impl Client<DeviceData, ClientData> for MqttClient {
                 loop {
                     // 等待指定的间隔时间再进行下一次发送
                     interval.tick().await;
+                    // 将消息数据序列化为JSON
+                    let mut msg_value: Value =
+                        serde_json::to_value(&*send_data).expect("序列化失败");
                     // 遍历每个组中的客户端
                     for cli in group.iter_mut() {
                         if !cli.is_connected() {
@@ -251,13 +255,12 @@ impl Client<DeviceData, ClientData> for MqttClient {
                                 topic.get_publish_real_topic(Some(client_data.get_device_key()));
                             // 获取当前本地时间
                             let now: DateTime<Local> = Local::now();
-                            // 格式化时间用于消息
-                            let formatted_time = now.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
-
-                            let mut msg_value = msg_value.clone(); // 克隆消息数据
-                            msg_value.set_timestamp(formatted_time.into()); // 设置时间戳
-
-                            // 将消息数据序列化为JSON
+                            if let Some(obj) = msg_value.as_object_mut() {
+                                obj.insert(
+                                    "timestamp".to_string(),
+                                    Value::Number(now.timestamp_millis().into()),
+                                );
+                            }
                             let json_msg = match serde_json::to_string(&msg_value) {
                                 Ok(msg) => msg,
                                 Err(e) => {
@@ -267,7 +270,7 @@ impl Client<DeviceData, ClientData> for MqttClient {
                             };
                             // 创建带有主题和负载的MQTT消息
                             let payload: Message =
-                                Message::new(real_topic, json_msg.clone(), topic.get_publish_qos());
+                                Message::new(real_topic, json_msg, topic.get_publish_qos());
                             counter.fetch_add(1, Ordering::SeqCst); // 增加计数器
                             let _ = cli.publish(payload); // 发布消息
                         }

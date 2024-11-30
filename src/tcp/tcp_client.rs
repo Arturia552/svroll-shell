@@ -15,9 +15,9 @@ use tokio::{
     time::Instant,
 };
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct TcpSendData {
-    pub send_data: Vec<u8>,
+    pub send_data: Arc<Vec<u8>>,
     pub len_index: usize,
     pub len_size: usize,
     pub enable_register: bool,
@@ -25,7 +25,7 @@ pub struct TcpSendData {
 
 impl TcpSendData {
     pub fn new(
-        send_data: Vec<u8>,
+        send_data: Arc<Vec<u8>>,
         len_index: usize,
         len_size: usize,
         enable_register: bool,
@@ -188,7 +188,7 @@ impl Client<TcpSendData, TcpClientData> for TcpSendData {
 
         for group in clients_group {
             let mut groups = group.to_vec();
-            let msg_value = self.send_data.clone();
+            let msg_value = Arc::clone(&self.send_data);
             let counter = counter.clone();
             let send_interval = config.get_send_interval();
             let enable_register = self.get_enable_register();
@@ -200,8 +200,7 @@ impl Client<TcpSendData, TcpClientData> for TcpSendData {
                     for client in groups.iter_mut() {
                         if let Some(mut writer) = TCP_CLIENT_CONTEXT.get_mut(&client.get_mac()) {
                             if enable_register && writer.writable().await.is_ok() {
-                                let msg = msg_value.clone();
-                                let _ = writer.write(&msg).await;
+                                let _ = writer.write(&msg_value).await;
                                 counter.fetch_add(1, Ordering::SeqCst);
                             }
                         }

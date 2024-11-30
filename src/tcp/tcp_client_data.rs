@@ -1,5 +1,7 @@
 use bytes::Buf;
-use tokio_util::codec::{Decoder, Encoder};
+use tokio::net::TcpStream;
+use tokio_stream::StreamExt;
+use tokio_util::codec::{Decoder, Encoder, FramedRead};
 
 pub struct TcpConn {}
 
@@ -45,5 +47,25 @@ impl Encoder<ResponseData> for ResponseCodec {
 
     fn encode(&mut self, item: ResponseData, dst: &mut bytes::BytesMut) -> Result<(), Self::Error> {
         todo!()
+    }
+}
+
+async fn process_client(tcp_stream: TcpStream) {
+    let (client_reader, _) = tcp_stream.into_split();
+
+    let mut frame_reader = FramedRead::new(client_reader, RequestCodec);
+
+    loop {
+        match frame_reader.next().await {
+            None => {
+                break;
+            }
+            Some(Err(_e)) => {
+                break;
+            }
+            Some(Ok(req_resp)) => {
+                println!("Received request: {:?}", req_resp);
+            }
+        }
     }
 }
