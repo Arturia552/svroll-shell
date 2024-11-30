@@ -98,6 +98,7 @@ pub struct TotalTopics {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct MqttConfig {
     pub topic: Option<TotalTopics>,
+    pub timestamp: Option<TimestampConfig>
 }
 
 impl MqttConfig {
@@ -126,4 +127,11 @@ pub async fn load_config(file_path: &str) -> Result<Config, Box<dyn std::error::
     file.read_to_string(&mut contents).await?;
     let config: Config = serde_yaml::from_str(&contents)?;
     Ok(config)
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TimestampConfig {
+    pub enable: bool,
+    pub code: String,
+    pub time_type: String
 }

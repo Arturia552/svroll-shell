@@ -17,13 +17,14 @@ use tokio::{
 
 use crate::{command::BenchmarkConfig, DeviceData, TopicWrap, CLIENT_CONTEXT};
 
-use super::Client;
+use super::{basic::TimestampConfig, Client};
 #[derive(Clone, Debug)]
 pub struct MqttClient {
     pub send_data: Arc<DeviceData>,
     pub enable_register: bool,
     pub register_topic: Arc<TopicWrap>,
     pub data_topic: Arc<TopicWrap>,
+    pub time_config: Option<TimestampConfig>,
 }
 
 impl MqttClient {
@@ -32,12 +33,14 @@ impl MqttClient {
         enable_register: bool,
         register_topic: TopicWrap,
         data_topic: TopicWrap,
+        time_config: Option<TimestampConfig>,
     ) -> Self {
         MqttClient {
             send_data: Arc::new(send_data),
             enable_register,
             register_topic: Arc::new(register_topic),
             data_topic: Arc::new(data_topic),
+            time_config,
         }
     }
 
@@ -228,6 +231,7 @@ impl Client<DeviceData, ClientData> for MqttClient {
             let mqtt_client = self.clone();
             let send_interval = config.get_send_interval();
             let topic = Arc::clone(&self.data_topic);
+            let time_config = self.time_config.clone();
 
             // 为每个客户端组生成一个异步任务
             tokio::spawn(async move {
@@ -255,11 +259,28 @@ impl Client<DeviceData, ClientData> for MqttClient {
                                 topic.get_publish_real_topic(Some(client_data.get_device_key()));
                             // 获取当前本地时间
                             let now: DateTime<Local> = Local::now();
+
                             if let Some(obj) = msg_value.as_object_mut() {
-                                obj.insert(
-                                    "timestamp".to_string(),
-                                    Value::Number(now.timestamp_millis().into()),
-                                );
+                                if let Some(time_cfg) = &time_config {
+                                    if time_cfg.time_type == "instant" {
+                                        let formatted_time =
+                                            now.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+                                        obj.insert(
+                                            time_cfg.code.to_owned(),
+                                            Value::String(formatted_time),
+                                        );
+                                    } else {
+                                        obj.insert(
+                                            time_cfg.code.to_owned(),
+                                            Value::Number(now.timestamp_millis().into()),
+                                        );
+                                    }
+                                } else {
+                                    obj.insert(
+                                        "timestamp".to_string(),
+                                        Value::Number(now.timestamp_millis().into()),
+                                    );
+                                }
                             }
                             let json_msg = match serde_json::to_string(&msg_value) {
                                 Ok(msg) => msg,

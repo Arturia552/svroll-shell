@@ -28,3 +28,6 @@ tracing = { version = "0.1.40"}
 tracing-subscriber = { version = "0.3.18"}
 tempfile = "3"
 [environment]
+
+[build-dependencies]
+fs_extra = "1.2"

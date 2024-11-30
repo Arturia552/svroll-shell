@@ -39,6 +39,7 @@ pub fn init_mqtt_context(
         benchmark_config.enable_register,
         register_topic,
         data_topic,
+        mqtt_config.timestamp
     );
 
     Ok(mqtt_client)
