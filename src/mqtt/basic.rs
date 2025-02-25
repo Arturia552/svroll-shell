@@ -3,7 +3,8 @@ use tokio::{fs::File, io::AsyncReadExt};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TopicInfo {
-    pub key_index: Option<usize>, // 将 key_index 改为 Option<u8> 以处理 null 值
+    pub key_index: Option<usize>,
+    pub key_label: Option<String>,
     pub topic: String,
     #[serde(default = "default_qos")]
     pub qos: i32,

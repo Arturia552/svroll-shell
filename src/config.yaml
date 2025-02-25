@@ -2,14 +2,16 @@ mqtt:
   topic:
     register:
       publish:
-        key_index: null
+        key_index: null,
+        key_label: "sn",
         topic: "/pub/register"
       subscribe:
-        key_index: 2
+        key_index: 2,
+        key_label: "device_key"
         topic: "/sub/register/ack"
     data:
       publish:
-        key_index: 2
+        key_index: 2,
         topic: "/pub/long_freq/data"
   timestamp: 
     enable: true

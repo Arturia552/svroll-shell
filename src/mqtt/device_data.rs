@@ -5,7 +5,6 @@ use serde_json::Value;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct DeviceData {
-    pub pub_reason: String,
     pub online: u8,
     pub data: Value,
 }

@@ -83,28 +83,32 @@ impl MqttClient {
         if let Some(msg) = msg {
             let topic = msg.topic(); // 获取消息主题
 
-            // 检查主题是否以"/sub"开头
-            if topic.starts_with("/sub") {
-                // 获取真实的主题和MAC地址
-                let (real_topic, mac) = Self::get_real_topic_mac(topic);
-                let data = msg.payload();
-                if let Ok(data) = serde_json::from_slice::<serde_json::Value>(data) {
-                    if self.get_enable_register() {
-                        let register_topic = self.get_register_topic();
-                        let reg_sub_topic = register_topic
-                            .get_subscribe_topic()
-                            .expect("没有配置注册订阅主题");
-                        // 检查真实主题是否为注册包回复
-                        if real_topic == reg_sub_topic {
-                            // 检查JSON对象中是否存在"device_key"
-                            if let Some(device_key) = data.get("device_key") {
-                                // 将device_key转换为字符串
-                                if let Some(device_key_str) = device_key.as_str() {
-                                    // 更新CLIENT_CONTEXT中的device_key
-                                    CLIENT_CONTEXT.entry(mac.to_string()).and_modify(|v| {
-                                        v.set_device_key(device_key_str.to_string());
-                                    });
-                                }
+            // 获取真实的主题和MAC地址
+            let (real_topic, mac) = Self::get_real_topic_mac(topic);
+            let data = msg.payload();
+            if let Ok(data) = serde_json::from_slice::<serde_json::Value>(data) {
+                if self.get_enable_register() {
+                    let register_topic = self.get_register_topic();
+                    let reg_sub_topic = register_topic
+                        .get_subscribe_topic()
+                        .expect("没有配置注册订阅主题");
+
+                    let key_label = register_topic.subscribe.clone().unwrap_or_else(||{
+                        panic!("没有配置注册包的subscribe")
+                    }).key_label.unwrap_or_else(||{
+                        panic!("没有配置注册包的key_label")
+                    });
+
+                    // 检查真实主题是否为注册包回复
+                    if real_topic == reg_sub_topic {
+                        // 检查JSON对象中是否存在"device_key"
+                        if let Some(device_key) = data.get(key_label) {
+                            // 将device_key转换为字符串
+                            if let Some(device_key_str) = device_key.as_str() {
+                                // 更新CLIENT_CONTEXT中的device_key
+                                CLIENT_CONTEXT.entry(mac.to_string()).and_modify(|v| {
+                                    v.set_device_key(device_key_str.to_string());
+                                });
                             }
                         }
                     }
@@ -177,32 +181,29 @@ impl Client<DeviceData, ClientData> for MqttClient {
         // 注册包机制启用判断
         if self.get_enable_register() {
             // 创建包含SN的JSON对象
-            let sn_json = serde_json::json!({"sn": cli.client_id()});
+            let key_label = self.register_topic.publish.key_label.clone().unwrap_or_else(||{
+                panic!("没有配置注册包的key_label")
+            });
+            // 创建订阅主题并订阅
+            let sub_topic = self.get_register_topic();
+            if sub_topic.is_exist_subscribe() {
+                let sub_topic_str =
+                    sub_topic.get_subscribe_real_topic(Some(cli.client_id().as_str()));
 
-            // 将JSON对象序列化为字符串，并处理可能的错误
-            match serde_json::to_string(&sn_json) {
-                Ok(sn_json_str) => {
-                    // 创建订阅主题并订阅
-                    let sub_topic = self.get_register_topic();
-                    if sub_topic.is_exist_subscribe() {
-                        let sub_topic_str =
-                            sub_topic.get_subscribe_real_topic(Some(cli.client_id().as_str()));
-
-                        let _ = cli.subscribe(sub_topic_str, sub_topic.get_subscribe_qos());
-                    }
-
-                    // 创建注册消息并发布
-                    let pub_topic = self.get_register_topic();
-                    let pub_topic_str = pub_topic.get_publish_topic();
-
-                    let register_msg =
-                        Message::new(pub_topic_str, sn_json_str, pub_topic.get_publish_qos());
-                    cli.publish(register_msg);
-                }
-                Err(e) => {
-                    eprintln!("设备注册失败，失败信息： {}", e);
-                }
+                let _ = cli.subscribe(sub_topic_str, sub_topic.get_subscribe_qos());
             }
+
+            // 创建注册消息并发布
+            let pub_topic = self.get_register_topic();
+            let pub_topic_str = pub_topic.get_publish_topic();
+
+            let register_json_str = format!(r#"{{"{}": "{}"}}"#, key_label, cli.client_id());
+            let register_msg = Message::new(
+                pub_topic_str,
+                register_json_str,
+                pub_topic.get_publish_qos(),
+            );
+            cli.publish(register_msg);
         }
     }
 
