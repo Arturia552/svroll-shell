@@ -3,6 +3,8 @@ use std::{
     sync::{atomic::AtomicU32, Arc},
 };
 
+use anyhow::Error;
+
 use crate::command::BenchmarkConfig;
 
 pub trait Client<T, C>: Send + Sync + Debug
@@ -24,7 +26,7 @@ where
     fn on_connect_success(
         &self,
         client: &mut Self::Item,
-    ) -> impl std::future::Future<Output = ()> + Send;
+    ) -> impl std::future::Future<Output = Result<(), Error>> + Send;
     fn spawn_message(
         &self,
         clients: Vec<Self::Item>,

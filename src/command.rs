@@ -4,6 +4,9 @@ use anyhow::{Context, Ok, Result};
 use clap::{arg, Parser, ValueEnum};
 use serde::de::DeserializeOwned;
 use tokio::fs;
+use tracing::info;
+
+use crate::tcp::tcp_client::{TcpClient, TcpSendData};
 
 #[derive(Debug, Clone, ValueEnum, PartialEq, Eq)]
 pub enum Protocol {
@@ -111,17 +114,39 @@ pub struct BenchmarkConfig<T, C> {
     pub send_interval: u64,
 }
 
+impl BenchmarkConfig<TcpSendData, TcpClient> {
+    pub async fn from_tcp_config(config: CommandConfig) -> Result<Self> {
+        let data = load_tcp_hex_data_from_file(&config.data_file).await?;
+
+        let clients = read_from_csv_into_struct::<TcpClient>(&config.client_file).await?;
+        Ok(Self {
+            protocol_type: config.protocol_type,
+            send_data: TcpSendData { data },
+            clients,
+            thread_size: config.thread_size,
+            enable_register: match config.enable_register {
+                Flag::True => true,
+                Flag::False => false,
+            },
+            broker: config.broker,
+            max_connect_per_second: config.max_connect_per_second,
+            send_interval: config.send_interval,
+        })
+    }
+}
+
 impl<T, C> BenchmarkConfig<T, C>
 where
     T: Debug,
     C: Debug,
 {
-    pub async fn from_config(config: CommandConfig) -> Result<BenchmarkConfig<T, C>>
+    pub async fn from_mqtt_config(config: CommandConfig) -> Result<BenchmarkConfig<T, C>>
     where
         T: DeserializeOwned + Debug,
         C: DeserializeOwned + Debug,
     {
         let data = load_send_data_from_json_file(&config.data_file).await?;
+
         let clients = read_from_csv_into_struct(&config.client_file).await?;
         Ok(Self {
             protocol_type: config.protocol_type,
@@ -207,6 +232,17 @@ where
         .with_context(|| format!("Failed to parse JSON from file: {}", file_path))?;
 
     Ok(msg)
+}
+
+pub async fn load_tcp_hex_data_from_file(file_path: &str) -> Result<Vec<u8>> {
+    let contents = fs::read_to_string(file_path)
+        .await
+        .with_context(|| format!("Failed to read the file: {}", file_path))?;
+    info!("读取到的数据: {}", contents);
+    let bytes = hex::decode(contents)
+        .with_context(|| format!("Failed to decode hex string from file: {}", file_path))?;
+
+    Ok(bytes)
 }
 
 pub async fn read_from_csv_into_struct<C>(file_path: &str) -> Result<Vec<C>>

@@ -1,11 +1,12 @@
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
+use serde_json::Value;
 use tokio::net::tcp::OwnedWriteHalf;
 
 use crate::{
     command::BenchmarkConfig,
     mqtt::{basic::MqttConfig, client_data::MqttClient},
-    ClientData, DeviceData,
+    ClientData,
 };
 
 // 全局静态变量，用于存储客户端上下文
@@ -14,7 +15,7 @@ pub static CLIENT_CONTEXT: Lazy<DashMap<String, ClientData>> = Lazy::new(DashMap
 pub static TCP_CLIENT_CONTEXT: Lazy<DashMap<String, OwnedWriteHalf>> = Lazy::new(DashMap::new);
 
 pub fn init_mqtt_context(
-    benchmark_config: &BenchmarkConfig<DeviceData, ClientData>,
+    benchmark_config: &BenchmarkConfig<Value, ClientData>,
     mqtt_config: MqttConfig,
 ) -> Result<MqttClient, Box<dyn std::error::Error>> {
     let register_topic;

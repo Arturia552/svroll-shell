@@ -1,14 +1,63 @@
-use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+use std::str::FromStr;
+
+use rumqttc::QoS;
+use serde::{Deserialize, Deserializer, Serialize};
 use tokio::{fs::File, io::AsyncReadExt};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TopicInfo {
+    #[serde(deserialize_with = "deserialize_key_index")]
     pub key_index: Option<usize>,
     pub key_label: Option<String>,
     pub topic: String,
     #[serde(default = "default_qos")]
     pub qos: i32,
 }
+
+fn deserialize_key_index<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_yaml::Value::deserialize(deserializer)?;
+    
+    match value {
+        // 如果是null值，直接返回None
+        serde_yaml::Value::Null => Ok(None),
+        
+        // 如果是数字，直接返回对应的值
+        serde_yaml::Value::Number(num) => {
+            if let Some(n) = num.as_u64() {
+                Ok(Some(n as usize))
+            } else {
+                Err(serde::de::Error::custom("Expected an unsigned integer"))
+            }
+        },
+        
+        // 如果是字符串，尝试解析，去除可能的逗号等字符
+        serde_yaml::Value::String(s) => {
+            if s == "null" {
+                return Ok(None);
+            }
+            
+            // 去除所有非数字字符
+            let clean_str: String = s.chars().filter(|c| c.is_digit(10)).collect();
+            
+            if clean_str.is_empty() {
+                Ok(None)
+            } else {
+                match usize::from_str(&clean_str) {
+                    Ok(n) => Ok(Some(n)),
+                    Err(_) => Err(serde::de::Error::custom(format!("Invalid usize: {}", s)))
+                }
+            }
+        },
+        
+        // 其他类型直接报错
+        _ => Err(serde::de::Error::custom("Expected null, number or string"))
+    }
+}
+
 
 pub fn default_qos() -> i32 {
     0
@@ -31,12 +80,12 @@ pub struct TopicWrap {
     pub subscribe: Option<TopicInfo>, // 使用 Option 来处理可能不存在的字段
 }
 
-pub fn wrap_real_topic<'a>(topic: &'a TopicInfo, key_value: Option<&str>) -> &'a str {
+pub fn wrap_real_topic<'a>(topic: &'a TopicInfo, key_value: Option<&str>) -> Cow<'a, str> {
     if topic.key_index.unwrap_or(0) == 0
         || key_value.is_none()
         || key_value.is_some_and(|val| val.is_empty())
     {
-        &topic.topic
+        return Cow::Borrowed(&topic.topic);
     } else {
         let key_index = topic.key_index.unwrap_or(0);
         let parts: Vec<&str> = topic.topic.split('/').collect();
@@ -49,9 +98,9 @@ pub fn wrap_real_topic<'a>(topic: &'a TopicInfo, key_value: Option<&str>) -> &'a
             new_topic_parts.extend(&parts[key_index..]);
 
             let new_topic = new_topic_parts.join("/");
-            Box::leak(new_topic.into_boxed_str())
+            Cow::Owned(new_topic)
         } else {
-            &topic.topic
+            Cow::Borrowed(&topic.topic)
         }
     }
 }
@@ -71,22 +120,34 @@ impl TopicWrap {
             .map(|sub_topic| sub_topic.get_topic())
     }
 
-    pub fn get_publish_qos(&self) -> i32 {
-        self.publish.get_qos()
+    pub fn get_publish_qos(&self) -> QoS {
+        match self.publish.get_qos() {
+            0 => QoS::AtMostOnce,
+            1 => QoS::AtLeastOnce,
+            2 => QoS::ExactlyOnce,
+            _ => QoS::AtMostOnce,
+        }
     }
 
-    pub fn get_subscribe_qos(&self) -> i32 {
-        self.subscribe.as_ref().unwrap().qos
+    pub fn get_subscribe_qos(&self) -> QoS {
+        match self.subscribe.as_ref().unwrap().qos {
+            0 => QoS::AtMostOnce,
+            1 => QoS::AtLeastOnce,
+            2 => QoS::ExactlyOnce,
+            _ => QoS::AtMostOnce,
+        }
     }
 
-    pub fn get_publish_real_topic(&self, key_value: Option<&str>) -> &str {
-        let topic = &self.publish;
-        wrap_real_topic(topic, key_value)
+    pub fn get_publish_real_topic<'a>(&'a self, key_value: Option<&str>) -> Cow<'a, str> {
+        wrap_real_topic(&self.publish, key_value)
     }
 
-    pub fn get_subscribe_real_topic(&self, key_value: Option<&str>) -> &str {
-        let topic = self.subscribe.as_ref().unwrap();
-        wrap_real_topic(topic, key_value)
+    pub fn get_subscribe_real_topic<'a>(&'a self, key_value: Option<&str>) -> Cow<'a, str> {
+        if let Some(topic) = &self.subscribe {
+            wrap_real_topic(topic, key_value)
+        } else {
+            Cow::Borrowed("")
+        }
     }
 }
 
@@ -99,7 +160,7 @@ pub struct TotalTopics {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct MqttConfig {
     pub topic: Option<TotalTopics>,
-    pub timestamp: Option<TimestampConfig>
+    pub timestamp: Option<TimestampConfig>,
 }
 
 impl MqttConfig {
@@ -134,5 +195,5 @@ pub async fn load_config(file_path: &str) -> Result<Config, Box<dyn std::error::
 pub struct TimestampConfig {
     pub enable: bool,
     pub code: String,
-    pub time_type: String
+    pub time_type: String,
 }

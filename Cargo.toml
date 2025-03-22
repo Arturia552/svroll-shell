@@ -3,12 +3,8 @@ name = "iot-benchmark"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-paho-mqtt = { version = "0.12.3", default-features = false, features = [
-    "bundled",
-] }
+rumqttc = "0.24.0"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.37.0", features = ["full"] }
 tokio-util = { version = "0.7.11", features = ["full"] }
@@ -27,7 +23,7 @@ anyhow = "1.0.86"
 tracing = { version = "0.1.40"}
 tracing-subscriber = { version = "0.3.18"}
 tempfile = "3"
-[environment]
+hex = "0.4.3"
 
 [build-dependencies]
 fs_extra = "1.2"
