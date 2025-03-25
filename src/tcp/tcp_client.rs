@@ -13,7 +13,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{tcp::OwnedReadHalf, TcpStream},
     sync::Semaphore,
-    time::Instant,
+    time::sleep,
 };
 use tracing::info;
 
@@ -120,36 +120,46 @@ impl Client<TcpSendData, TcpClient> for TcpClientContext {
         &self,
         config: &BenchmarkConfig<TcpSendData, TcpClient>,
     ) -> Result<Vec<TcpClient>, Box<dyn std::error::Error>> {
-        let clients = vec![];
+        let mut clients = config.get_clients().clone();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(clients.len());
 
         let semaphore = Arc::new(Semaphore::new(config.get_max_connect_per_second()));
 
-        for client in config.get_clients() {
-            let semaphore = Arc::clone(&semaphore);
-            let permit = semaphore.acquire().await.unwrap();
+        for (idx, client) in clients.iter().enumerate() {
+            let permit = semaphore.acquire().await?;
+            let broker = config.broker.clone();
+            let mac = client.get_mac();
+            let tx = tx.clone();
 
-            let start = Instant::now();
-            let conn = TcpStream::connect(config.get_broker()).await?;
-
-            let (reader, writer) = conn.into_split();
-            TCP_CLIENT_CONTEXT.insert(client.get_mac(), writer);
             tokio::spawn(async move {
-                Self::process_read(reader).await;
+                if let Ok(conn) = TcpStream::connect(broker).await {
+                    let (reader, writer) = conn.into_split();
+                    TCP_CLIENT_CONTEXT.insert(mac, writer);
+                    tokio::spawn(async move {
+                        Self::process_read(reader).await;
+                    });
+                    let _ = tx.send((idx, true)).await;
+                };
             });
 
-            let elapsed = start.elapsed();
-            if elapsed < Duration::from_secs(1) {
-                tokio::time::sleep(Duration::from_secs(1) - elapsed).await;
-            }
-
             drop(permit);
+            if clients.len() % config.get_max_connect_per_second() == 0 {
+                sleep(Duration::from_secs(1)).await;
+            }
         }
 
+        drop(tx);
+        info!("等待所有客户端连接...");
+        while let Some((idx, success)) = rx.recv().await {
+            if success {
+                clients[idx].set_is_connected(true);
+            }
+        }
+        info!("所有客户端连接成功");
         Ok(clients)
     }
 
     async fn wait_for_connections(&self, clients: &mut [TcpClient]) {
-        info!("等待连接...");
         for client in clients {
             let _ = self.on_connect_success(client).await;
         }
