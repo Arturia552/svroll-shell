@@ -63,7 +63,7 @@ pub struct CommandConfig {
         long,
         value_name = "Flag",
         value_enum,
-        default_value = "true",
+        default_value = "false",
         help = "设置是否启用注册包机制,默认为false"
     )]
     pub enable_register: Flag,
@@ -73,8 +73,8 @@ pub struct CommandConfig {
         short = 'b',
         long,
         value_name = "BROKER",
-        default_value = "mqtt://localhost:1883",
-        help = "设置mqtt broker地址,默认为mqtt://localhost:1883"
+        default_value = "127.0.0.1:1883",
+        help = "设置mqtt broker地址,默认为127.0.0.1:1883"
     )]
     pub broker: String,
 

@@ -331,9 +331,14 @@ impl Client<Value, ClientData> for MqttClient {
                                 let _ = mqtt_client.on_connect_success(cli).await;
                                 continue;
                             }
-                            let real_topic =
-                                topic.get_publish_real_topic(Some(client_data.get_device_key()));
-                            // 获取当前本地时间
+                            let real_topic = match client_data.get_identify_key() {
+                                Some(identify_key) => {
+                                    topic.get_pushlish_real_topic_identify_key(identify_key.clone())
+                                }
+                                None => {
+                                    topic.get_publish_real_topic(Some(client_data.get_device_key()))
+                                }
+                            };
                             let now: DateTime<Local> = Local::now();
 
                             let mut payload = send_data.clone();
@@ -427,6 +432,7 @@ pub struct ClientData {
     pub client_id: String,
     pub username: String,
     pub password: String,
+    pub identify_key: Option<String>,
     #[serde(skip)]
     pub device_key: String,
     #[serde(skip)]
@@ -456,6 +462,10 @@ impl ClientData {
 
     pub fn get_device_key(&self) -> &str {
         &self.device_key
+    }
+
+    pub fn get_identify_key(&self) -> &Option<String> {
+        &self.identify_key
     }
 
     pub fn set_client_id(&mut self, client_id: String) {

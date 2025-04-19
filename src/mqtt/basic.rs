@@ -142,6 +142,28 @@ impl TopicWrap {
         wrap_real_topic(&self.publish, key_value)
     }
 
+    pub fn get_pushlish_real_topic_identify_key<'a>(&'a self, identify_key: String) -> Cow<'a,str> {
+        let topic = &self.publish;
+        let key_index = topic.key_index;
+        if key_index.is_none() || identify_key.trim().is_empty() {
+            return Cow::Borrowed(&topic.topic);
+        }else {
+            let key_index = key_index.unwrap();
+            let parts: Vec<&str> = topic.topic.split('/').collect();
+
+            if key_index < parts.len() {
+                let mut new_topic_parts = parts[..key_index].to_vec();
+                new_topic_parts.push(&identify_key);
+                new_topic_parts.extend(&parts[key_index..]);
+
+                let new_topic = new_topic_parts.join("/");
+                return Cow::Owned(new_topic);
+            }
+            return Cow::Borrowed(&topic.topic);
+        }
+        
+    }
+
     pub fn get_subscribe_real_topic<'a>(&'a self, key_value: Option<&str>) -> Cow<'a, str> {
         if let Some(topic) = &self.subscribe {
             wrap_real_topic(topic, key_value)

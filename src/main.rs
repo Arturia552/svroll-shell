@@ -4,7 +4,7 @@ use comfy_table::Table;
 use iot_benchmark::{
     command::{BenchmarkConfig, CommandConfig, Protocol},
     init_mqtt_context, load_config,
-    mqtt::{basic::Config, Client},
+    mqtt::Client,
     tcp::tcp_client::TcpClientContext,
 };
 use std::{
@@ -50,10 +50,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!("TCP客户端上下文: {:?}", tcp_client_context);
             info!("正在初始化TCP客户端...");
             tcp_client_context.setup_clients(&benchmark_config).await?;
-            tcp_client_context.wait_for_connections(&mut benchmark_config.clients).await;
+            tcp_client_context
+                .wait_for_connections(&mut benchmark_config.clients)
+                .await;
             info!("客户端已全部连接!");
             tcp_client_context
-                .spawn_message(benchmark_config.clients.clone(), counter.clone(), &benchmark_config)
+                .spawn_message(
+                    benchmark_config.clients.clone(),
+                    counter.clone(),
+                    &benchmark_config,
+                )
                 .await;
         }
     }
