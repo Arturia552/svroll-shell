@@ -46,3 +46,5 @@ jobs:
           target: ${{ matrix.target }}  
           # (required) GitHub token for uploading assets to GitHub Releases.  
           token: ${{ secrets.GITHUB_TOKEN }}
+          include: src/config.yaml,src/client.csv,src/data.json
+          leading-dir: true
