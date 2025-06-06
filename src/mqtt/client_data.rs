@@ -24,8 +24,6 @@ use super::{basic::TimestampConfig, Client};
 #[derive(Clone, Debug)]
 pub struct MqttClient {
     pub send_data: Value,
-    pub enable_register: bool,
-    pub register_topic: Arc<TopicWrap>,
     pub data_topic: Arc<TopicWrap>,
     pub time_config: Option<TimestampConfig>,
 }
@@ -33,15 +31,11 @@ pub struct MqttClient {
 impl MqttClient {
     pub fn new(
         send_data: Value,
-        enable_register: bool,
-        register_topic: TopicWrap,
         data_topic: TopicWrap,
         time_config: Option<TimestampConfig>,
     ) -> Self {
         MqttClient {
             send_data: send_data,
-            enable_register,
-            register_topic: Arc::new(register_topic),
             data_topic: Arc::new(data_topic),
             time_config,
         }
@@ -49,22 +43,6 @@ impl MqttClient {
 
     pub fn get_send_data(&self) -> &Value {
         &self.send_data
-    }
-
-    pub fn get_enable_register(&self) -> bool {
-        self.enable_register
-    }
-
-    pub fn set_enable_register(&mut self, enable: bool) {
-        self.enable_register = enable;
-    }
-
-    pub fn set_register_topic(&mut self, topic: TopicWrap) {
-        self.register_topic = Arc::new(topic);
-    }
-
-    pub fn get_register_topic(&self) -> &TopicWrap {
-        &self.register_topic
     }
 
     pub fn set_data_topic(&mut self, topic: TopicWrap) {
@@ -75,42 +53,22 @@ impl MqttClient {
         &self.data_topic
     }
 
-    fn parse_topic_mac(topic: &str, key_index: usize) -> (String, String) {
-        let topic = topic.to_string();
-        let mut topic = topic.split('/').collect::<Vec<&str>>();
-        let mac = topic.remove(key_index);
-        (topic.join("/"), mac.to_string())
-    }
-
     async fn handle_event_loop(
         client_id: String,
         mut event_loop: EventLoop,
-        self_clone: Arc<MqttClient>,
     ) -> JoinHandle<()> {
         info!("启动事件循环: {}", client_id);
-        // 返回JoinHandle以便后续可以取消
         tokio::spawn(async move {
             loop {
-                // 每次循环前检查客户端是否还存在
                 if !CLIENT_CONTEXT.contains_key(&client_id) {
                     break;
                 }
 
                 match event_loop.poll().await {
-                    Ok(Event::Incoming(Packet::Publish(publish))) => {
-                        self_clone.on_message_callback(&publish.topic, &publish.payload);
-                    }
                     Ok(Event::Incoming(Packet::ConnAck(_))) => {
                         info!("连接成功: {}", client_id);
                         if let Some(mut client) = CLIENT_CONTEXT.get_mut(&client_id) {
-                            match self_clone.on_connect_success(&mut client).await {
-                                Ok(_) => {
-                                    client.set_is_connected(true);
-                                }
-                                Err(e) => {
-                                    error!("连接初始化失败: {:?}", e);
-                                }
-                            }
+                            client.set_is_connected(true);
                         }
                     }
                     Err(e) => {
@@ -148,39 +106,6 @@ impl MqttClient {
             }
         })
     }
-
-    fn on_message_callback(&self, topic: &str, payload: &[u8]) {
-        if let Ok(data) = serde_json::from_slice::<serde_json::Value>(payload) {
-            if self.get_enable_register() {
-                let register_topic = self.get_register_topic();
-                let Some(reg_subscribe) = &register_topic.subscribe else {
-                    return;
-                };
-
-                let (real_topic, mac) =
-                    Self::parse_topic_mac(topic, reg_subscribe.key_index.unwrap());
-
-                let Some(reg_sub_topic) = register_topic.get_subscribe_topic() else {
-                    return;
-                };
-                let Some(extra_key) = &reg_subscribe.key_label else {
-                    return;
-                };
-
-                if real_topic != reg_sub_topic {
-                    return;
-                }
-
-                if let Some(device_key) = data.get(extra_key) {
-                    if let Some(device_key_str) = device_key.as_str() {
-                        CLIENT_CONTEXT.entry(mac.to_string()).and_modify(|v| {
-                            v.set_device_key(device_key_str.to_string());
-                        });
-                    }
-                }
-            }
-        }
-    }
 }
 
 impl Client<Value, ClientData> for MqttClient {
@@ -192,7 +117,6 @@ impl Client<Value, ClientData> for MqttClient {
     ) -> Result<Vec<ClientData>, Box<dyn std::error::Error>> {
         let mut clients = vec![];
 
-        let self_arc = Arc::new(self.clone());
         let broker = config.get_broker();
         let semaphore = Arc::new(Semaphore::new(config.get_max_connect_per_second()));
 
@@ -221,8 +145,7 @@ impl Client<Value, ClientData> for MqttClient {
 
             // 启动事件循环处理
             let client_id = client.client_id.clone();
-            let event_loop_handle =
-                Self::handle_event_loop(client_id.clone(), event_loop, Arc::clone(&self_arc)).await;
+            let event_loop_handle = Self::handle_event_loop(client_id.clone(), event_loop).await;
             client.event_loop_handle = Some(Arc::new(Mutex::new(Some(event_loop_handle))));
             client.set_client(Some(cli.clone()));
             CLIENT_CONTEXT.insert(client.get_client_id().to_string(), client.clone());
@@ -240,50 +163,6 @@ impl Client<Value, ClientData> for MqttClient {
     }
 
     async fn on_connect_success(&self, cli: &mut ClientData) -> Result<(), Error> {
-        let client = cli
-            .get_client()
-            .ok_or_else(|| Error::msg("客户端未初始化"))?;
-
-        // 注册包机制启用判断
-        if self.get_enable_register() {
-            let register_topic = self.get_register_topic();
-
-            // 检查 extra_key
-            let extra_key = match &register_topic.publish.key_label {
-                Some(key) => key,
-                None => {
-                    // 断开连接并返回错误
-                    if let Err(e) = client.disconnect().await {
-                        error!("断开连接失败: {:?}", e);
-                    }
-                    return Err(Error::msg("注册主题配置错误"));
-                }
-            };
-
-            // 订阅主题处理
-            if register_topic.is_exist_subscribe() {
-                let sub_topic_str = register_topic.get_subscribe_real_topic(Some(&cli.client_id));
-                let qos = register_topic.get_subscribe_qos();
-
-                if let Err(e) = client.subscribe(sub_topic_str, qos).await {
-                    error!("订阅主题失败: {:?}", e);
-                    return Err(Error::msg(format!("订阅主题失败: {:?}", e)));
-                }
-            }
-
-            // 发布注册消息
-            let pub_topic_str = register_topic.get_publish_topic();
-            let register_json_str = format!(r#"{{"{}": "{}"}}"#, extra_key, cli.client_id);
-            let qos = register_topic.get_publish_qos();
-
-            if let Err(e) = client
-                .publish(pub_topic_str, qos, false, register_json_str)
-                .await
-            {
-                error!("发布注册消息失败: {:?}", e);
-                return Err(Error::msg(format!("发布注册消息失败: {:?}", e)));
-            }
-        }
         Ok(())
     }
 
@@ -306,13 +185,11 @@ impl Client<Value, ClientData> for MqttClient {
 
         // 遍历每个客户端组
         for group in clients_group {
-            let mut group = group.to_vec(); // 将组转换为数组以获得所有权
+            let mut group = group.to_vec();
             let send_data = self.send_data.clone();
-            let counter: Arc<AtomicU32> = counter.clone(); // 克隆原子计数器
-            let mqtt_client = self.clone();
+            let counter: Arc<AtomicU32> = counter.clone();
             let send_interval = config.get_send_interval();
             let topic = Arc::clone(&self.data_topic);
-            let enable_register = config.enable_register;
             let time_config = self.time_config.clone();
 
             // 为每个客户端组生成一个异步任务
@@ -326,17 +203,12 @@ impl Client<Value, ClientData> for MqttClient {
                         let client_id = cli.get_client_id().to_string();
                         if let Some(client_data) = CLIENT_CONTEXT.get(&client_id) {
                             // 创建发布的主题
-                            let device_key = client_data.get_device_key();
-                            if device_key.is_empty() && enable_register {
-                                let _ = mqtt_client.on_connect_success(cli).await;
-                                continue;
-                            }
                             let real_topic = match client_data.get_identify_key() {
                                 Some(identify_key) => {
                                     topic.get_pushlish_real_topic_identify_key(identify_key.clone())
                                 }
                                 None => {
-                                    topic.get_publish_real_topic(Some(client_data.get_device_key()))
+                                    topic.get_publish_real_topic(Some(&client_data.client_id))
                                 }
                             };
                             let now: DateTime<Local> = Local::now();
@@ -434,10 +306,6 @@ pub struct ClientData {
     pub password: String,
     pub identify_key: Option<String>,
     #[serde(skip)]
-    pub device_key: String,
-    #[serde(skip)]
-    pub enable_register: bool,
-    #[serde(skip)]
     pub is_connected: bool,
     #[serde(skip)]
     pub client: Option<AsyncClient>,
@@ -460,32 +328,12 @@ impl ClientData {
         &self.password
     }
 
-    pub fn get_device_key(&self) -> &str {
-        &self.device_key
-    }
-
     pub fn get_identify_key(&self) -> &Option<String> {
         &self.identify_key
     }
 
     pub fn set_client_id(&mut self, client_id: String) {
         self.client_id = client_id;
-    }
-
-    pub fn set_device_key(&mut self, device_key: String) {
-        self.device_key = device_key;
-    }
-
-    pub fn set_enable_register(&mut self, enable_register: bool) {
-        self.enable_register = enable_register;
-    }
-
-    pub fn is_enable_register(&self) -> bool {
-        self.enable_register
-    }
-
-    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(json)
     }
 
     pub fn set_is_connected(&mut self, is_connected: bool) {

@@ -1,14 +1,5 @@
 mqtt:
   topic:
-    register:
-      publish:
-        key_index: null
-        key_label: "sn"
-        topic: "/pub/register"
-      subscribe:
-        key_index: 2
-        key_label: "device_key"
-        topic: "/sub/register/ack"
     data:
       publish:
         key_index: 2
@@ -17,4 +8,4 @@ mqtt:
     enable: true
     code: 'timestamp'
     time_type: 'instant'  # instant or iso
-tcp: 
+tcp:

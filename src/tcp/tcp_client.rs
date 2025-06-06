@@ -37,18 +37,9 @@ where
 #[derive(Debug, Clone)]
 pub struct TcpClientContext {
     pub send_data: Arc<TcpSendData>,
-    pub enable_register: bool,
 }
 
 impl TcpClientContext {
-    pub fn get_enable_register(&self) -> bool {
-        self.enable_register
-    }
-
-    pub fn set_enable_register(&mut self, enable_register: bool) {
-        self.enable_register = enable_register
-    }
-
     async fn process_read(mut reader: OwnedReadHalf) {
         let mut buf = [0; 1024];
 
@@ -75,8 +66,6 @@ pub struct TcpClient {
     pub mac: String,
     #[serde(skip)]
     pub is_connected: bool,
-    #[serde(skip)]
-    pub is_register: bool,
 }
 
 impl TcpClient {
@@ -84,7 +73,6 @@ impl TcpClient {
         Self {
             mac,
             is_connected: false,
-            is_register: false,
         }
     }
 
@@ -102,14 +90,6 @@ impl TcpClient {
 
     pub fn get_is_connected(&self) -> bool {
         self.is_connected
-    }
-
-    pub fn set_is_register(&mut self, is_register: bool) {
-        self.is_register = is_register;
-    }
-
-    pub fn get_is_register(&self) -> bool {
-        self.is_register
     }
 }
 
@@ -160,20 +140,9 @@ impl Client<TcpSendData, TcpClient> for TcpClientContext {
     }
 
     async fn wait_for_connections(&self, clients: &mut [TcpClient]) {
-        for client in clients {
-            let _ = self.on_connect_success(client).await;
-        }
     }
 
     async fn on_connect_success(&self, client: &mut TcpClient) -> Result<(), Error> {
-        if let Some(mut writer) = TCP_CLIENT_CONTEXT.get_mut(&client.get_mac()) {
-            if self.get_enable_register() {
-                let reg_code = hex::decode(client.get_mac()).unwrap();
-                writer.write_all(&reg_code).await?;
-            }
-        } else {
-            println!("没有找到客户端: {}", client.get_mac());
-        }
         Ok(())
     }
 

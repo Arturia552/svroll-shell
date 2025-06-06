@@ -57,17 +57,6 @@ pub struct CommandConfig {
     #[arg(short = 't', long, value_parser = clap::value_parser!(usize), default_value_t = 200,help="设置启动协程数量,默认为200")]
     pub thread_size: usize,
 
-    /// 设置是否启用注册包机制
-    #[arg(
-        short = 'r',
-        long,
-        value_name = "Flag",
-        value_enum,
-        default_value = "false",
-        help = "设置是否启用注册包机制,默认为false"
-    )]
-    pub enable_register: Flag,
-
     /// 设置mqtt broker地址,默认为mqtt://localhost:1883
     #[arg(
         short = 'b',
@@ -101,9 +90,6 @@ pub struct BenchmarkConfig<T, C> {
     /// 设置启动协程数量,默认为200
     pub thread_size: usize,
 
-    /// 设置是否启用注册包机制
-    pub enable_register: bool,
-
     /// 设置mqtt broker地址,默认为mqtt://localhost:1883
     pub broker: String,
 
@@ -124,10 +110,6 @@ impl BenchmarkConfig<TcpSendData, TcpClient> {
             send_data: TcpSendData { data },
             clients,
             thread_size: config.thread_size,
-            enable_register: match config.enable_register {
-                Flag::True => true,
-                Flag::False => false,
-            },
             broker: config.broker,
             max_connect_per_second: config.max_connect_per_second,
             send_interval: config.send_interval,
@@ -153,10 +135,6 @@ where
             send_data: data,
             clients,
             thread_size: config.thread_size,
-            enable_register: match config.enable_register {
-                Flag::True => true,
-                Flag::False => false,
-            },
             broker: config.broker,
             max_connect_per_second: config.max_connect_per_second,
             send_interval: config.send_interval,
@@ -193,10 +171,6 @@ where
 
     pub fn set_thread_size(&mut self, thread_size: usize) {
         self.thread_size = thread_size;
-    }
-
-    pub fn set_enable_register(&mut self, enable_register: bool) {
-        self.enable_register = enable_register;
     }
 
     pub fn set_broker(&mut self, broker: String) {
@@ -317,21 +291,5 @@ mod tests {
         );
 
         Ok(())
-    }
-
-    #[test]
-    fn test_command_config_default_values() {
-        let args = vec!["test_app"];
-        let config = CommandConfig::parse_from(args);
-
-        // 检查默认值
-        assert_eq!(config.data_file, "./data.json");
-        assert_eq!(config.protocol_type, Protocol::Mqtt);
-        assert_eq!(config.client_file, "./client.csv");
-        assert_eq!(config.thread_size, 200);
-        assert_eq!(config.enable_register, Flag::True);
-        assert_eq!(config.broker, "mqtt://localhost:1883");
-        assert_eq!(config.max_connect_per_second, 100);
-        assert_eq!(config.send_interval, 1);
     }
 }

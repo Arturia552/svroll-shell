@@ -175,7 +175,6 @@ impl TopicWrap {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TotalTopics {
-    pub register: Option<TopicWrap>,
     pub data: Option<TopicWrap>,
 }
 
@@ -183,17 +182,6 @@ pub struct TotalTopics {
 pub struct MqttConfig {
     pub topic: Option<TotalTopics>,
     pub timestamp: Option<TimestampConfig>,
-}
-
-impl MqttConfig {
-    pub fn get_register_topic(&self) -> Option<&str> {
-        self.topic.as_ref().and_then(|topics| {
-            topics
-                .register
-                .as_ref()
-                .map(|topic| topic.get_publish_topic())
-        })
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

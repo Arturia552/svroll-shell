@@ -44,8 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut benchmark_config = BenchmarkConfig::from_tcp_config(command_config).await?;
 
             let tcp_client_context = TcpClientContext {
-                send_data: Arc::new(benchmark_config.send_data.clone()),
-                enable_register: benchmark_config.enable_register,
+                send_data: Arc::new(benchmark_config.send_data.clone())
             };
             info!("TCP客户端上下文: {:?}", tcp_client_context);
             info!("正在初始化TCP客户端...");

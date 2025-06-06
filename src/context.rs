@@ -18,14 +18,8 @@ pub fn init_mqtt_context(
     benchmark_config: &BenchmarkConfig<Value, ClientData>,
     mqtt_config: MqttConfig,
 ) -> Result<MqttClient, Box<dyn std::error::Error>> {
-    let register_topic;
     let data_topic;
     if let Some(topic) = mqtt_config.topic {
-        if let Some(register) = topic.register {
-            register_topic = register;
-        } else {
-            return Err("没有配置注册主题".into());
-        }
         if let Some(data) = topic.data {
             data_topic = data;
         } else {
@@ -37,8 +31,6 @@ pub fn init_mqtt_context(
 
     let mqtt_client: MqttClient = MqttClient::new(
         benchmark_config.get_send_data().clone(),
-        benchmark_config.enable_register,
-        register_topic,
         data_topic,
         mqtt_config.timestamp
     );
